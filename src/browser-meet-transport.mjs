@@ -165,7 +165,12 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
   }
 
   navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
-    if (!constraints.audio) return nativeGetUserMedia(constraints);
+    if (!constraints.audio) {
+      // Meet may probe video independently before the pre-join camera control
+      // settles. Return an empty stream instead of ever touching a camera.
+      if (constraints.video) return new MediaStream();
+      return nativeGetUserMedia(constraints);
+    }
     await ensureAudioGraph();
     const outgoing = new MediaStream();
     // The meeting agent is intentionally audio-only. Never acquire or expose
@@ -572,7 +577,7 @@ export class BrowserMeetTransport {
       headless: this.headless,
       args: [...MEET_BROWSER_ARGS],
       viewport: { width: 1280, height: 850 },
-      permissions: ["microphone", "camera"],
+      permissions: ["microphone"],
     };
     if (this.browserChannel && this.browserChannel !== "chromium") {
       launchOptions.channel = this.browserChannel;

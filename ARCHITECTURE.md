@@ -32,7 +32,7 @@ Google Meet
 | Agent harness | Codex / Claude Code / Hermes / Pi | Start/resume durable context, answer, interrupt, enforce permissions, close |
 | Speech output | Local / OpenAI / Grok / Codex | Stream mono PCM and feed the synthetic Meet microphone |
 | Transcript store | Local Markdown + JSONL | Preserve call and private records with timestamps and visibility |
-| Sidecar | Token-authenticated loopback HTTP | Show call/private timeline; keep prompts silent; require confirmation to speak |
+| Sidecar | Token-authenticated loopback HTTP | Show call/private timeline; keep prompts silent; require confirmation to speak; clear token-bearing URL fragments |
 
 ## Harness portability
 
@@ -79,4 +79,4 @@ All session data and the dedicated browser profile live under ignored `data/` pa
 3. Additional durable harness adapters for Cursor and agent SDKs as their permission contracts mature.
 4. Cross-platform TTS and audio-device support.
 5. Hosted browser workers and calendar-driven launch.
-6. Stronger recovery supervision for browser crashes and meeting reconnects.
+6. Operator approval cards for write requests raised from the room.

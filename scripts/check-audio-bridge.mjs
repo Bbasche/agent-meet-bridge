@@ -46,6 +46,22 @@ try {
     return element.muted && element.volume === 0 && window.__meetingAgentSilencesLocalPlayback === true;
   });
   if (!playbackIsSilent) throw new Error("Bot media elements were not silenced locally");
+  const mediaPrivacy = await page.evaluate(async () => {
+    const videoOnly = await navigator.mediaDevices.getUserMedia({ video: true });
+    const meetingStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    return {
+      videoOnlyTracks: videoOnly.getTracks().length,
+      meetingAudioTracks: meetingStream.getAudioTracks().length,
+      meetingVideoTracks: meetingStream.getVideoTracks().length,
+    };
+  });
+  if (
+    mediaPrivacy.videoOnlyTracks !== 0 ||
+    mediaPrivacy.meetingAudioTracks !== 1 ||
+    mediaPrivacy.meetingVideoTracks !== 0
+  ) {
+    throw new Error(`Unexpected media privacy shape: ${JSON.stringify(mediaPrivacy)}`);
+  }
   await page.evaluate(async () => {
     const receiver = new RTCPeerConnection();
     const audio = new AudioContext({ sampleRate: 48_000 });
@@ -68,6 +84,7 @@ try {
   ]);
   console.log(`✓ Remote WebRTC audio capture: ${result.bytes} bytes, RMS ${Math.round(result.rms)}`);
   console.log("✓ Local bot playback is silenced without muting WebRTC capture");
+  console.log("✓ Synthetic microphone is present and physical camera acquisition is blocked");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

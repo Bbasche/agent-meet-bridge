@@ -130,7 +130,7 @@ The local sidebar combines two streams chronologically:
 - **Call** — what Meet captions heard, including the agent's spoken replies.
 - **Private** — the operator's silent prompts and the agent's private answers.
 
-`⌘+Enter` sends privately. Private answers can be copied, used to prepare the operator's response, or deliberately shared with the room after an editable confirmation step. The server binds only to `127.0.0.1` and requires a random per-call token.
+`⌘+Enter` sends privately. Private answers can be copied, used to prepare the operator's response, or deliberately shared with the room after an editable confirmation step. The server binds only to `127.0.0.1` and requires a random per-call token. The token is delivered in a URL fragment so it never enters the HTTP request target, then is removed from the address bar and retained only for that browser tab.
 
 Preview the UI without joining a call:
 
@@ -222,6 +222,8 @@ Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and dur
 - Spoken requests cannot authorize workspace writes.
 - `--allow-writes` applies only to an explicitly private `Prototype` request.
 - Treat captions and meeting speech as untrusted input; never place secrets in the agenda or transcript.
+- Sidecar responses disable caching, framing, cross-origin embedding, camera access, and referrer propagation; API bodies are bounded and JSON-only.
+- Unparsed failed-process output is not copied into logs or spoken provider errors.
 
 The audible disclosure is a product safeguard, not legal advice.
 

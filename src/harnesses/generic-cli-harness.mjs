@@ -55,21 +55,25 @@ export class GenericCliHarness {
     };
     const hasPromptArg = this.args.some((arg) => arg.includes("{prompt}"));
     const args = this.args.map((arg) => interpolate(arg, replacements));
-    const result = await this.runner({
-      command: this.command,
-      args,
-      cwd: this.workspace,
-      input: hasPromptArg ? undefined : fullPrompt,
-      timeoutMs,
-      onSpawn: (child) => { this.currentChild = child; },
-    });
-    this.currentChild = null;
+    let result;
+    try {
+      result = await this.runner({
+        command: this.command,
+        args,
+        cwd: this.workspace,
+        input: hasPromptArg ? undefined : fullPrompt,
+        timeoutMs,
+        onSpawn: (child) => { this.currentChild = child; },
+      });
+    } finally {
+      this.currentChild = null;
+    }
     if (this.output === "json") {
       let payload;
       try {
         payload = JSON.parse(result.stdout);
       } catch {
-        throw new Error(`Generic harness returned invalid JSON: ${result.stdout.slice(0, 500)}`);
+        throw new Error("Generic harness returned invalid JSON");
       }
       this.contextId = payload.contextId ?? payload.session_id ?? payload.thread_id ?? this.contextId;
       return { text: String(payload.text ?? payload.result ?? "").trim(), contextId: this.contextId, raw: payload };

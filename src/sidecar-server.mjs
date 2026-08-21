@@ -14,14 +14,30 @@ const MIME_TYPES = new Map([
 ]);
 
 async function readJson(request, maxBytes = 32_768) {
+  const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    const error = new Error("Content-Type must be application/json");
+    error.statusCode = 415;
+    throw error;
+  }
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > maxBytes) throw new Error("Request is too large");
+    if (size > maxBytes) {
+      const error = new Error("Request is too large");
+      error.statusCode = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } catch {
+    const error = new Error("Request body must be valid JSON");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 function sendJson(response, status, body) {
@@ -55,11 +71,18 @@ export class SidecarServer {
   async listen(port = 4317) {
     this.server = http.createServer((request, response) => {
       this.#handle(request, response).catch((error) => {
-        this.logger.error?.(error);
-        if (!response.headersSent) sendJson(response, 500, { error: "The private sidecar failed" });
+        const status = Number(error.statusCode) || 500;
+        if (status >= 500) this.logger.error?.(error);
+        if (!response.headersSent) {
+          sendJson(response, status, {
+            error: status >= 500 ? "The private sidecar failed" : error.message,
+          });
+        }
         else response.end();
       });
     });
+    this.server.headersTimeout = 10_000;
+    this.server.requestTimeout = 30_000;
     const bind = (candidatePort) => new Promise((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(candidatePort, "127.0.0.1", resolve);
@@ -73,7 +96,9 @@ export class SidecarServer {
     }
     const address = this.server.address();
     const actualPort = typeof address === "object" && address ? address.port : port;
-    return `http://127.0.0.1:${actualPort}/?session=${encodeURIComponent(this.sessionToken)}`;
+    // Keep the bearer token out of HTTP request targets, logs, and referrers. The
+    // sidecar reads it from the URL fragment once, stores it per-tab, then clears it.
+    return `http://127.0.0.1:${actualPort}/#session=${encodeURIComponent(this.sessionToken)}`;
   }
 
   async close() {
@@ -90,6 +115,9 @@ export class SidecarServer {
     );
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("X-Frame-Options", "DENY");
+    response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    response.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
 
     if (url.pathname.startsWith("/api/")) {
       if (!hasSession(request, this.sessionToken)) {

@@ -88,6 +88,20 @@ test("generic CLI uses argument arrays and can carry JSON context", async () => 
   assert.equal(calls[0].input, undefined);
 });
 
+test("generic CLI does not echo malformed provider output", async () => {
+  const harness = new GenericCliHarness({
+    command: "custom-agent",
+    output: "json",
+    workspace: "/tmp/workspace",
+    runner: async () => ({ stdout: "private-meeting-content", stderr: "", code: 0 }),
+  });
+  await harness.start();
+  await assert.rejects(
+    harness.ask({ prompt: "Question" }),
+    (error) => error.message === "Generic harness returned invalid JSON",
+  );
+});
+
 test("Claude Code preserves one session and constrains read-only tools", async () => {
   const calls = [];
   const runner = async (request) => {

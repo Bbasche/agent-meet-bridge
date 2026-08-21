@@ -18,6 +18,10 @@ All notable changes to this project are documented here.
 - Buffer meeting PCM until reconnecting providers acknowledge the configured voice session.
 - Close failed handshake sockets and use one bounded retry supervisor for realtime reconnects.
 - Silence the bot browser's local media playback without using Chrome's capture-breaking mute flag.
+- Harden the private sidecar with fragment-only session bootstrap, security headers, bounded JSON requests, serialized polling, and stable timeline rendering.
+- Block physical camera acquisition even during Meet's independent pre-join media probes and verify the synthetic microphone/camera shape in a real browser.
+- Keep unparsed failed harness stdout and stderr out of surfaced errors so private meeting or repository content cannot be repeated into logs or speech.
+- Report the real automatic-stop reason in fallback debriefs and fix agenda updates in the sidecar.
 
 ## 0.1.5 — 2026-08-21
 

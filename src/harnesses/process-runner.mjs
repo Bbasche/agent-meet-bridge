@@ -59,8 +59,11 @@ export async function runProcess({
       };
       if (code === 0) finish(resolve, result);
       else {
-        const detail = result.stderr.trim() || result.stdout.trim() || signal || `exit ${code}`;
-        finish(reject, Object.assign(new Error(`${command} failed: ${detail.slice(0, 2_000)}`), { result }));
+        // Harness output can contain meeting context, repository content, or
+        // provider diagnostics. Keep it attached for adapter parsing without
+        // copying it into logs, spoken errors, or the public meeting timeline.
+        const outcome = signal ? `signal ${signal}` : `exit ${code}`;
+        finish(reject, Object.assign(new Error(`${command} failed (${outcome})`), { result }));
       }
     });
     const timer = setTimeout(() => {

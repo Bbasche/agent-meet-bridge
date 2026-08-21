@@ -58,14 +58,18 @@ export class HermesHarness {
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (!writeTurn) args.push("--safe-mode");
     args.push("--oneshot", combinedPrompt);
-    const result = await this.runner({
-      command: this.command,
-      args,
-      cwd: this.workspace,
-      timeoutMs,
-      onSpawn: (child) => { this.currentChild = child; },
-    });
-    this.currentChild = null;
+    let result;
+    try {
+      result = await this.runner({
+        command: this.command,
+        args,
+        cwd: this.workspace,
+        timeoutMs,
+        onSpawn: (child) => { this.currentChild = child; },
+      });
+    } finally {
+      this.currentChild = null;
+    }
     await this.#refreshSessionId(timeoutMs).catch(() => {});
     this.started = true;
     return { text: result.stdout.trim(), contextId: this.sessionId, raw: result };

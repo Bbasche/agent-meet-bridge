@@ -70,14 +70,18 @@ export class PiHarness {
     // complete prompt as the final positional message.
     args.push(prompt);
 
-    const result = await this.runner({
-      command: this.command,
-      args,
-      cwd: this.workspace,
-      timeoutMs,
-      onSpawn: (child) => { this.currentChild = child; },
-    });
-    this.currentChild = null;
+    let result;
+    try {
+      result = await this.runner({
+        command: this.command,
+        args,
+        cwd: this.workspace,
+        timeoutMs,
+        onSpawn: (child) => { this.currentChild = child; },
+      });
+    } finally {
+      this.currentChild = null;
+    }
 
     let answer = "";
     let deltaText = "";

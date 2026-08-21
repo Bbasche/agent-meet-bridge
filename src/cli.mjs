@@ -653,7 +653,7 @@ async function startMeeting() {
     }, 2_000);
     contextSnapshotTimer.unref?.();
   };
-  const createDebrief = async () => {
+  const createDebrief = async (reason = "meeting-ended") => {
     await flushContextSnapshot();
     const recentContext = meetingContext.snapshot({ maxChars: 40_000, maxTurns: 200 });
     const privateContext = privateTranscript
@@ -664,7 +664,7 @@ async function startMeeting() {
     const fallback = [
       "# Meeting debrief",
       "",
-      "The meeting ended automatically after the configured alone timeout.",
+      `The meeting ended automatically (${reason}).`,
       "",
       "The connected coding task did not return a generated debrief. Review the saved transcript for decisions and next actions.",
     ].join("\n");
@@ -710,7 +710,7 @@ async function startMeeting() {
     }
     await voiceRuntime?.close().catch(() => {});
     await flushContextSnapshot().catch((error) => console.error(error.message));
-    if (debrief) await createDebrief().catch((error) => console.error(error.message));
+    if (debrief) await createDebrief(reason).catch((error) => console.error(error.message));
     await transcriptStore.flush().catch((error) => console.error(error.message));
     await workHarness.close();
     keepAwake?.kill("SIGTERM");

@@ -66,13 +66,14 @@ export class ClaudeCodeHarness {
     } catch (error) {
       if (!error.result?.stdout) throw error;
       result = error.result;
+    } finally {
+      this.currentChild = null;
     }
-    this.currentChild = null;
     let payload;
     try {
       payload = JSON.parse(result.stdout);
     } catch {
-      throw new Error(`Claude Code returned invalid JSON: ${result.stdout.slice(0, 500)}`);
+      throw new Error("Claude Code returned invalid JSON");
     }
     if (payload.is_error) throw new Error(payload.result || "Claude Code turn failed");
     this.sessionId = payload.session_id ?? this.sessionId;
