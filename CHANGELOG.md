@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.2.0 — 2026-08-21
 
 - Add provider-neutral durable harness adapters for Codex, Claude Code, Cursor, Hermes, and Pi, plus a shell-free generic CLI adapter.
 - Add one shared OpenAI-compatible realtime voice core for OpenAI Realtime and Grok Voice.
