@@ -1,7 +1,7 @@
 import path from "node:path";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
-import { utteranceAddressesAgent } from "./policy.mjs";
+import { isDismissal, isFollowupCue, utteranceAddressesAgent } from "./policy.mjs";
 
 function pcmRms(bytes) {
   const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
@@ -54,18 +54,6 @@ function isSilentReply(text) {
     /^(?:silence|no response|no reply)$/i.test(clean) ||
     /\b(?:remain(?:s|ing)?|stay(?:s|ing)?|keep(?:s|ing)?|will stay|i(?:'ll| will) stay)\s+(?:completely\s+)?(?:silent|quiet)\b/i.test(clean) ||
     /\b(?:does not|doesn't|will not|won't) respond\b/i.test(clean)
-  );
-}
-
-function isDismissal(text) {
-  return /\b(?:not (?:talking|speaking|asking|addressing) (?:to )?you|do not respond|don't respond|stay quiet|remain silent)\b/i.test(
-    String(text ?? ""),
-  );
-}
-
-function isFollowupCue(text) {
-  return /^(?:and|also|okay[, ]+and|what|where|when|why|how|which|who|can|could|would|will|do|does|did|is|are|should|then)\b/i.test(
-    String(text ?? "").trim(),
   );
 }
 
@@ -156,6 +144,7 @@ export class LocalCodexVoiceRuntime {
   }
 
   appendAudio(pcmBytes) {
+    if (this.transcriptSource !== "local-whisper") return false;
     if (!this.connected || this.closing || !pcmBytes?.length) return false;
     const frame = Buffer.from(pcmBytes);
     const rms = pcmRms(frame);

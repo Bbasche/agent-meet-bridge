@@ -24,8 +24,48 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
   let fakeMicrophone;
   let playbackGain;
   let playbackCursor = 0;
+  let captureBus;
+  let captureProcessor;
+  let captureSink;
+  let captureFrame = new Int16Array(FRAME_SAMPLES);
+  let captureOffset = 0;
   const playbackSources = new Set();
   const attachedTrackIds = new Set();
+  const remoteSources = new Map();
+
+  function silenceMediaElement(element) {
+    if (!(element instanceof HTMLMediaElement)) return;
+    if (!element.muted) element.muted = true;
+    if (element.volume !== 0) element.volume = 0;
+  }
+
+  function silenceMediaTree(root) {
+    if (root instanceof HTMLMediaElement) silenceMediaElement(root);
+    root?.querySelectorAll?.("audio,video").forEach(silenceMediaElement);
+  }
+
+  const playbackSilencer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.target instanceof HTMLMediaElement) silenceMediaElement(mutation.target);
+      mutation.addedNodes.forEach((node) => silenceMediaTree(node));
+    }
+  });
+  const startPlaybackSilencer = () => {
+    silenceMediaTree(document);
+    if (document.documentElement) {
+      playbackSilencer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["muted", "volume"],
+      });
+    }
+  };
+  document.addEventListener("play", (event) => silenceMediaElement(event.target), true);
+  document.addEventListener("volumechange", (event) => silenceMediaElement(event.target), true);
+  if (document.documentElement) startPlaybackSilencer();
+  else document.addEventListener("DOMContentLoaded", startPlaybackSilencer, { once: true });
+  window.__meetingAgentSilencesLocalPlayback = true;
 
   function bytesToBase64(bytes) {
     let binary = "";
@@ -41,6 +81,7 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
       return;
     }
     context = new AudioContext({ sampleRate: SAMPLE_RATE });
+    if (context.state === "suspended") await context.resume().catch(() => {});
     fakeMicrophone = context.createMediaStreamDestination();
     playbackGain = context.createGain();
     playbackGain.connect(fakeMicrophone);
@@ -52,12 +93,64 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
   async function attachRemoteTrack(track) {
     if (!track || track.kind !== "audio" || attachedTrackIds.has(track.id)) return;
     await ensureAudioGraph();
+    if (!captureBus) {
+      captureBus = context.createGain();
+      captureBus.gain.value = 1;
+      captureSink = context.createGain();
+      captureSink.gain.value = 0;
+      captureSink.connect(context.destination);
+      try {
+        const workletSource = 'class MeetingAgentPcmProcessor extends AudioWorkletProcessor {' +
+          'constructor(){super();this.frame=new Int16Array(4800);this.offset=0;}' +
+          'process(inputs){const samples=inputs[0]&&inputs[0][0];if(!samples)return true;' +
+          'for(let i=0;i<samples.length;i++){const value=Math.max(-1,Math.min(1,samples[i]));' +
+          'this.frame[this.offset++]=value<0?Math.round(value*32768):Math.round(value*32767);' +
+          'if(this.offset===4800){this.port.postMessage(this.frame.buffer,[this.frame.buffer]);' +
+          'this.frame=new Int16Array(4800);this.offset=0;}}return true;}}' +
+          'registerProcessor("meeting-agent-pcm",MeetingAgentPcmProcessor);';
+        const moduleUrl = URL.createObjectURL(new Blob([workletSource], { type: "text/javascript" }));
+        await context.audioWorklet.addModule(moduleUrl);
+        URL.revokeObjectURL(moduleUrl);
+        captureProcessor = new AudioWorkletNode(context, "meeting-agent-pcm", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        });
+        captureProcessor.port.onmessage = (event) => {
+          window.__meetingAgentAudioIn?.(bytesToBase64(new Uint8Array(event.data)));
+        };
+      } catch (error) {
+        console.warn("[meeting-agent] AudioWorklet unavailable; using ScriptProcessor: " + error.message);
+        captureProcessor = context.createScriptProcessor(2048, 1, 1);
+        captureProcessor.onaudioprocess = (event) => {
+          const samples = event.inputBuffer.getChannelData(0);
+          for (let index = 0; index < samples.length; index += 1) {
+            const clamped = Math.max(-1, Math.min(1, samples[index]));
+            captureFrame[captureOffset++] = clamped < 0
+              ? Math.round(clamped * 32768)
+              : Math.round(clamped * 32767);
+            if (captureOffset !== FRAME_SAMPLES) continue;
+            const bytes = new Uint8Array(captureFrame.buffer.slice(0));
+            window.__meetingAgentAudioIn?.(bytesToBase64(bytes));
+            captureFrame = new Int16Array(FRAME_SAMPLES);
+            captureOffset = 0;
+          }
+        };
+      }
+      captureBus.connect(captureProcessor);
+      captureProcessor.connect(captureSink);
+    }
+    const source = context.createMediaStreamSource(new MediaStream([track]));
+    source.connect(captureBus);
+    remoteSources.set(track.id, source);
     attachedTrackIds.add(track.id);
     window.__meetingAgentPeerIn?.();
     track.addEventListener("ended", () => {
+      remoteSources.get(track.id)?.disconnect();
+      remoteSources.delete(track.id);
       attachedTrackIds.delete(track.id);
     }, { once: true });
-    console.info("[meeting-agent] observed remote audio track; captions provide input");
+    console.info("[meeting-agent] attached remote audio track to PCM capture");
   }
 
   const NativePeerConnection = window.RTCPeerConnection;
@@ -72,7 +165,12 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
   }
 
   navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
-    if (!constraints.audio) return nativeGetUserMedia(constraints);
+    if (!constraints.audio) {
+      // Meet may probe video independently before the pre-join camera control
+      // settles. Return an empty stream instead of ever touching a camera.
+      if (constraints.video) return new MediaStream();
+      return nativeGetUserMedia(constraints);
+    }
     await ensureAudioGraph();
     const outgoing = new MediaStream();
     // The meeting agent is intentionally audio-only. Never acquire or expose
@@ -362,6 +460,10 @@ export class BrowserMeetTransport {
     onAudio,
     onCaption,
     onAlone,
+    onStatus,
+    onFatal,
+    autoReconnect = true,
+    maxReconnectAttempts = 8,
   }) {
     this.meetingUrl = meetingUrl;
     this.displayName = displayName;
@@ -375,35 +477,69 @@ export class BrowserMeetTransport {
     this.onAudio = onAudio;
     this.onCaption = onCaption;
     this.onAlone = onAlone;
+    this.onStatus = onStatus;
+    this.onFatal = onFatal;
+    this.autoReconnect = autoReconnect;
+    this.maxReconnectAttempts = maxReconnectAttempts;
     this.context = null;
     this.page = null;
     this.presenceTimer = null;
     this.seenOthers = false;
     this.aloneSince = null;
     this.aloneTriggered = false;
+    this.intentionalClose = false;
+    this.hasJoined = false;
+    this.reconnectAttempts = 0;
+    this.reconnectTimer = null;
+    this.reconnecting = false;
+    this.presenceCheckPending = false;
   }
 
   async #checkPresence() {
-    if (!this.page || this.page.isClosed() || this.aloneTriggered) return;
-    const snapshot = await this.page.evaluate(() => ({
-      bodyText: document.body?.innerText ?? "",
-      ariaLabels: Array.from(document.querySelectorAll("[aria-label]"), (element) => element.getAttribute("aria-label") ?? ""),
-    })).catch(() => null);
-    if (!snapshot) return;
-    const now = Date.now();
-    const next = nextMeetingPresence(
-      { seenOthers: this.seenOthers, aloneSince: this.aloneSince },
-      meetingPopulationFromSnapshot(snapshot),
-      { now, timeoutMs: this.aloneTimeoutMs },
-    );
-    this.seenOthers = next.seenOthers;
-    this.aloneSince = next.aloneSince;
-    if (!next.shouldLeave) return;
-    this.aloneTriggered = true;
-    await this.onAlone?.({
-      reason: next.reason,
-      aloneForMs: next.aloneSince === null ? 0 : now - next.aloneSince,
-    });
+    if (!this.page || this.page.isClosed() || this.aloneTriggered || this.presenceCheckPending) return;
+    this.presenceCheckPending = true;
+    try {
+      const snapshot = await this.page.evaluate(() => {
+        if (!document.body) return { bodyText: "", ariaLabels: [] };
+        const signalPattern = /\b(?:you left the meeting|meeting (?:has )?ended|return to home screen|no one else is here|you(?:'re| are) the only one here|waiting for others to join)\b/i;
+        const signals = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let inspected = 0;
+        while (signals.length < 20 && inspected < 20_000) {
+          const node = walker.nextNode();
+          if (!node) break;
+          inspected += 1;
+          const text = String(node.nodeValue ?? "").replace(/\s+/g, " ").trim();
+          if (text.length <= 160 && signalPattern.test(text)) signals.push(text);
+        }
+        const ariaLabels = [];
+        const labeled = document.querySelectorAll(
+          '[aria-label*="participant" i], [aria-label*="people" i], [aria-label*="everyone" i]',
+        );
+        for (let index = 0; index < labeled.length && ariaLabels.length < 100; index += 1) {
+          const label = labeled[index].getAttribute("aria-label");
+          if (label && label.length <= 200) ariaLabels.push(label);
+        }
+        return { bodyText: signals.join(" "), ariaLabels };
+      }).catch(() => null);
+      if (!snapshot) return;
+      const now = Date.now();
+      const next = nextMeetingPresence(
+        { seenOthers: this.seenOthers, aloneSince: this.aloneSince },
+        meetingPopulationFromSnapshot(snapshot),
+        { now, timeoutMs: this.aloneTimeoutMs },
+      );
+      this.seenOthers = next.seenOthers;
+      this.aloneSince = next.aloneSince;
+      if (!next.shouldLeave) return;
+      this.aloneTriggered = true;
+      await this.onAlone?.({
+        reason: next.reason,
+        aloneForMs: next.aloneSince === null ? 0 : now - next.aloneSince,
+      });
+    } finally {
+      this.presenceCheckPending = false;
+    }
   }
 
   #startPresenceMonitor() {
@@ -418,16 +554,69 @@ export class BrowserMeetTransport {
   }
 
   async join() {
+    this.intentionalClose = false;
+    await this.#joinOnce();
+    this.hasJoined = true;
+    this.reconnectAttempts = 0;
+    await this.onStatus?.({ state: "joined" });
+  }
+
+  #scheduleReconnect(reason) {
+    if (
+      this.intentionalClose || !this.autoReconnect || !this.hasJoined ||
+      this.reconnectTimer || this.reconnecting
+    ) return;
+    const attempt = ++this.reconnectAttempts;
+    if (attempt > this.maxReconnectAttempts) {
+      this.onStatus?.({ state: "failed", reason });
+      this.onFatal?.(new Error(`Google Meet browser recovery failed after ${this.maxReconnectAttempts} attempts`));
+      return;
+    }
+    const delay = Math.min(30_000, 1_000 * (2 ** Math.min(attempt - 1, 5)));
+    this.onStatus?.({ state: "reconnecting", reason, attempt, delayMs: delay });
+    this.logger.warn?.(`[meet] browser disconnected; rejoining in ${delay}ms (attempt ${attempt})`);
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      this.reconnecting = true;
+      let recovered = false;
+      try {
+        await this.#joinOnce();
+        recovered = true;
+        this.reconnectAttempts = 0;
+        await this.onStatus?.({ state: "joined", recovered: true });
+      } catch (error) {
+        this.logger.warn?.(`[meet] rejoin failed: ${error.message}`);
+        await this.context?.close().catch(() => {});
+        this.context = null;
+        this.page = null;
+      } finally {
+        this.reconnecting = false;
+      }
+      if (!recovered) this.#scheduleReconnect("rejoin-failed");
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  async #joinOnce() {
     const launchOptions = {
       headless: this.headless,
       args: [...MEET_BROWSER_ARGS],
       viewport: { width: 1280, height: 850 },
-      permissions: ["microphone", "camera"],
+      permissions: ["microphone"],
     };
     if (this.browserChannel && this.browserChannel !== "chromium") {
       launchOptions.channel = this.browserChannel;
     }
-    this.context = await chromium.launchPersistentContext(this.profileDir, launchOptions);
+    const launchedContext = await chromium.launchPersistentContext(this.profileDir, launchOptions);
+    this.context = launchedContext;
+    launchedContext.once("close", () => {
+      if (this.context !== launchedContext) return;
+      this.context = null;
+      this.page = null;
+      clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
+      this.#scheduleReconnect("browser-closed");
+    });
     await this.context.addInitScript({ content: AUDIO_BRIDGE_SCRIPT });
     await this.context.exposeFunction("__meetingAgentAudioIn", async (base64Pcm) => {
       await this.onAudio?.(Buffer.from(base64Pcm, "base64"));
@@ -450,6 +639,10 @@ export class BrowserMeetTransport {
       if (message.text().includes("[meeting-agent]")) this.logger.debug?.(message.text());
     });
     this.page.on("pageerror", (error) => this.logger.error?.(`[meet] ${error.message}`));
+    this.page.on("crash", () => {
+      this.logger.warn?.("[meet] renderer crashed");
+      launchedContext.close().catch(() => {});
+    });
 
     await this.page.goto(this.meetingUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await this.page.evaluate((displayName) => {
@@ -556,6 +749,9 @@ export class BrowserMeetTransport {
   }
 
   async close() {
+    this.intentionalClose = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     clearInterval(this.presenceTimer);
     this.presenceTimer = null;
     try {
@@ -610,4 +806,4 @@ export async function inspectBotProfile({ profileDir, browserChannel = "chrome" 
   }
 }
 
-export { AUDIO_SAMPLE_RATE, MEET_BROWSER_ARGS };
+export { AUDIO_BRIDGE_SCRIPT, AUDIO_SAMPLE_RATE, MEET_BROWSER_ARGS };

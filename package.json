@@ -1,6 +1,6 @@
 {
   "name": "agent-meet-bridge",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -33,8 +33,10 @@
     "threads": "node src/cli.mjs threads",
     "doctor": "node src/cli.mjs doctor",
     "realtime-check": "node src/cli.mjs realtime-check",
-    "test": "node --test test/cli.test.mjs test/policy.test.mjs test/local-transport.test.mjs test/codex-realtime-runtime.test.mjs test/local-codex-voice-runtime.test.mjs test/sidecar-server.test.mjs test/transcript-store.test.mjs",
-    "check": "node --check src/cli.mjs && node --check src/browser-meet-transport.mjs && node --check src/codex-app-server.mjs && node --check src/codex-realtime-runtime.mjs && node --check src/local-codex-voice-runtime.mjs && node --check src/grok-voice-runtime.mjs && node --check src/sidecar-server.mjs && node --check sidecar/app.js && npm test"
+    "check:audio": "node scripts/check-audio-bridge.mjs",
+    "check:realtime-loop": "node scripts/check-realtime-loop.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/cli.mjs && node --check src/browser-meet-transport.mjs && node --check src/codex-app-server.mjs && node --check src/codex-realtime-runtime.mjs && node --check src/realtime-voice-runtime.mjs && node --check src/workspace-context.mjs && node --check src/meeting-context.mjs && node --check src/harness-output.mjs && node --check src/local-codex-voice-runtime.mjs && node --check src/grok-voice-runtime.mjs && node --check src/openai-realtime-runtime.mjs && node --check src/harnesses/*.mjs && node --check src/sidecar-server.mjs && node --check sidecar/app.js && npm test && npm run check:realtime-loop"
   },
   "dependencies": {
     "playwright": "1.62.1",

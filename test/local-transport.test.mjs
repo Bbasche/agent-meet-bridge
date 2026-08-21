@@ -29,6 +29,20 @@ test("bot capture does not use Chrome mute-audio, which zeros WebRTC samples", (
   assert.equal(MEET_BROWSER_ARGS.includes("--mute-audio"), false);
 });
 
+test("bot media elements are locally silenced to prevent same-machine feedback", async () => {
+  const source = await readFile(new URL("../src/browser-meet-transport.mjs", import.meta.url), "utf8");
+  assert.match(source, /__meetingAgentSilencesLocalPlayback/);
+  assert.match(source, /element\.muted = true/);
+  assert.match(source, /element\.volume = 0/);
+});
+
+test("remote WebRTC tracks are mixed into the realtime PCM input bridge", async () => {
+  const source = await readFile(new URL("../src/browser-meet-transport.mjs", import.meta.url), "utf8");
+  assert.match(source, /createMediaStreamSource\(new MediaStream\(\[track\]\)\)/);
+  assert.match(source, /__meetingAgentAudioIn/);
+  assert.match(source, /FRAME_SAMPLES = 4800/);
+});
+
 test("meeting population detection recognizes only-participant and ended states", () => {
   assert.deepEqual(
     meetingPopulationFromSnapshot({ bodyText: "You're the only one here" }),

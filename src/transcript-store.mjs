@@ -17,8 +17,12 @@ export class TranscriptStore {
     this.metadataPath = path.join(this.sessionDir, "session.json");
     this.privateJsonlPath = path.join(this.sessionDir, "private.jsonl");
     this.privateMarkdownPath = path.join(this.sessionDir, "private.md");
+    this.contextPath = path.join(this.sessionDir, "context.md");
     this.debriefPath = path.join(this.sessionDir, "debrief.md");
     this.metadata = metadata;
+    this.roomQueue = Promise.resolve();
+    this.privateQueue = Promise.resolve();
+    this.contextQueue = Promise.resolve();
   }
 
   async initialize() {
@@ -39,6 +43,11 @@ export class TranscriptStore {
       { flag: "wx", mode: 0o600 },
     );
     await writeFile(this.privateJsonlPath, "", { flag: "wx", mode: 0o600 });
+    await writeFile(
+      this.contextPath,
+      `# ${markdownEscape(this.metadata.agentName)} live meeting context\n\nNo meeting speech has been captured yet.\n`,
+      { flag: "wx", mode: 0o600 },
+    );
   }
 
   async append(entry) {
@@ -47,18 +56,23 @@ export class TranscriptStore {
     const text = cleanText(entry.text);
     if (!text) return;
     const record = { ...entry, timestamp, speaker, text };
-    await appendFile(this.jsonlPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    const time = new Date(timestamp).toLocaleTimeString("en-ZA", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-    await appendFile(
-      this.markdownPath,
-      `- ${time} **${markdownEscape(speaker)}:** ${markdownEscape(text)}\n`,
-      { mode: 0o600 },
-    );
+    const operation = async () => {
+      await appendFile(this.jsonlPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+      const time = new Date(timestamp).toLocaleTimeString("en-ZA", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+      await appendFile(
+        this.markdownPath,
+        `- ${time} **${markdownEscape(speaker)}:** ${markdownEscape(text)}\n`,
+        { mode: 0o600 },
+      );
+    };
+    const pending = this.roomQueue.then(operation, operation);
+    this.roomQueue = pending.catch(() => {});
+    return pending;
   }
 
   async appendPrivate(entry) {
@@ -67,23 +81,41 @@ export class TranscriptStore {
     const text = cleanText(entry.text);
     if (!text) return;
     const record = { ...entry, timestamp, speaker, text, visibility: "private" };
-    await appendFile(this.privateJsonlPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    const time = new Date(timestamp).toLocaleTimeString("en-ZA", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-    await appendFile(
-      this.privateMarkdownPath,
-      `- ${time} **${markdownEscape(speaker)}:** ${markdownEscape(text)}\n`,
-      { mode: 0o600 },
-    );
+    const operation = async () => {
+      await appendFile(this.privateJsonlPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+      const time = new Date(timestamp).toLocaleTimeString("en-ZA", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+      await appendFile(
+        this.privateMarkdownPath,
+        `- ${time} **${markdownEscape(speaker)}:** ${markdownEscape(text)}\n`,
+        { mode: 0o600 },
+      );
+    };
+    const pending = this.privateQueue.then(operation, operation);
+    this.privateQueue = pending.catch(() => {});
+    return pending;
   }
 
   async writeDebrief(text) {
     const content = String(text ?? "").trim();
     if (!content) throw new Error("Debrief cannot be empty");
     await writeFile(this.debriefPath, `${content}\n`, { mode: 0o600 });
+  }
+
+  async writeContext(text) {
+    const content = String(text ?? "").trim();
+    if (!content) throw new Error("Meeting context cannot be empty");
+    const operation = () => writeFile(this.contextPath, `${content}\n`, { mode: 0o600 });
+    const pending = this.contextQueue.then(operation, operation);
+    this.contextQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  async flush() {
+    await Promise.all([this.roomQueue, this.privateQueue, this.contextQueue]);
   }
 }

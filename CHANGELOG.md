@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## 0.2.0 — 2026-08-21
+
+- Add provider-neutral durable harness adapters for Codex, Claude Code, Cursor, Hermes, and Pi, plus a shell-free generic CLI adapter.
+- Add one shared OpenAI-compatible realtime voice core for OpenAI Realtime and Grok Voice.
+- Add audio-rate conversion, passive output gating, function calls, reconnect buffering, and provider readiness checks.
+- Enable the Codex app-server realtime feature explicitly and report its current API-key requirement without hanging.
+- Capture decoded remote WebRTC audio through an AudioWorklet and recover the isolated meeting browser after crashes without losing the durable agent context.
+- Add bounded meeting/repository context packs and harden passive wake-name gating against provider event reordering.
+- Add a real loopback WebSocket integration check covering session readiness, PCM conversion, wake gating, harness tools, and spoken output.
+- Persist a bounded live `context.md` and include structured room plus private-operator context in the private debrief.
+- Retain high-signal context across long calls and serialize transcript writes before shutdown.
+- Reconcile raw-audio transcripts with recent Meet speaker labels and bind passive follow-ups to the original speaker.
+- Serialize inbound realtime events so asynchronous callbacks cannot reorder speaker permissions or playback.
+- Buffer meeting PCM until reconnecting providers acknowledge the configured voice session.
+- Close failed handshake sockets and use one bounded retry supervisor for realtime reconnects.
+- Silence the bot browser's local media playback without using Chrome's capture-breaking mute flag.
+- Harden the private sidecar with fragment-only session bootstrap, security headers, bounded JSON requests, serialized polling, and stable timeline rendering.
+- Block physical camera acquisition even during Meet's independent pre-join media probes and verify the synthetic microphone/camera shape in a real browser.
+- Keep unparsed failed harness stdout and stderr out of surfaced errors so private meeting or repository content cannot be repeated into logs or speech.
+- Report the real automatic-stop reason in fallback debriefs and fix agenda updates in the sidecar.
+- Replace full-page Meet presence snapshots with bounded signal-only scans and prevent overlapping monitor polls on long calls.
+- Route detailed room-triggered harness output to the silent private stream; keep only actually spoken summaries in the room transcript.
+- Bound harness results before provider/UI handoff and explicitly prohibit secret or private-sidecar disclosure into the meeting.
+
 ## 0.1.5 — 2026-08-21
 
 - Make the bridge BYO-agent: name, wake word, task title, voice instructions, and optional persona guidance are operator supplied.

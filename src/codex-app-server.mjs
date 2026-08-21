@@ -20,7 +20,10 @@ export class CodexAppServer {
   async start() {
     if (this.child) return;
 
-    this.child = spawn(this.command, ["app-server", "--listen", "stdio://"], {
+    const args = ["app-server"];
+    if (this.experimentalApi) args.push("--enable", "realtime_conversation");
+    args.push("--listen", "stdio://");
+    this.child = spawn(this.command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });

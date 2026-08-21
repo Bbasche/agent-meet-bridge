@@ -1,6 +1,7 @@
 import { SidecarServer } from "../src/sidecar-server.mjs";
 
 const token = "local-preview";
+let agenda = "1. Confirm goals\n2. WordPress plugin and technical questions\n3. Decisions, owners, and next steps";
 const server = new SidecarServer({
   sessionToken: token,
   getState: async () => ({
@@ -12,7 +13,7 @@ const server = new SidecarServer({
     codexConnected: true,
     codexThreadId: "preview-thread",
     allowWrites: false,
-    agenda: "1. Confirm goals\n2. WordPress plugin and technical questions\n3. Decisions, owners, and next steps",
+    agenda,
   }),
   onPrivateMessage: async ({ message }) => {
     await new Promise((resolve) => setTimeout(resolve, 650));
@@ -24,7 +25,10 @@ const server = new SidecarServer({
   },
   onStop: async () => false,
   onSpeak: async ({ text }) => console.log(`[preview] would speak: ${text}`),
-  onAgendaUpdate: async ({ text }) => ({ agenda: text }),
+  onAgendaUpdate: async ({ text }) => {
+    agenda = text;
+    return { agenda };
+  },
 });
 
 const url = await server.listen(Number(process.env.SIDECAR_PREVIEW_PORT ?? 4318));

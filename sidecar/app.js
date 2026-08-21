@@ -1,5 +1,13 @@
 const params = new URLSearchParams(window.location.search);
-const session = params.get("session") ?? "";
+const fragmentParams = new URLSearchParams(window.location.hash.slice(1));
+const session = fragmentParams.get("session")
+  ?? params.get("session")
+  ?? sessionStorage.getItem("meeting-agent-session")
+  ?? "";
+if (session) sessionStorage.setItem("meeting-agent-session", session);
+if (window.location.search || window.location.hash) {
+  history.replaceState(null, "", window.location.pathname);
+}
 const messages = document.querySelector("#messages");
 const conversation = document.querySelector("#conversation");
 const composer = document.querySelector("#composer");
@@ -18,11 +26,15 @@ const agendaText = document.querySelector("#agenda-text");
 const saveAgenda = document.querySelector("#save-agenda");
 let desiredAction = "analyze";
 let currentAgentName = "Meeting employee";
+let currentHarnessName = "agent";
 let shouldFollowTail = true;
 let toastTimer;
 let privateTurnPending = false;
 let lastTimelineSignature = "";
 let renderingTimeline = false;
+let refreshInFlight = null;
+let renderedTimelineEntries = [];
+let timelineDomDirty = false;
 
 function api(path, options = {}) {
   return fetch(path, {
@@ -58,7 +70,7 @@ function messageRow(role, text, { pending = false, speaker, visibility = "privat
   if (pending) {
     article.className = "tool-trace";
     article.setAttribute("role", "status");
-    article.innerHTML = '<span class="tool-trace__spinner" aria-hidden="true"></span><span><strong>Working in Codex</strong><br />Using the ongoing task privately</span><button class="tool-trace__stop" type="button">Stop</button>';
+    article.innerHTML = `<span class="tool-trace__spinner" aria-hidden="true"></span><span><strong>Working in ${currentHarnessName}</strong><br />Using the ongoing task privately</span><button class="tool-trace__stop" type="button">Stop</button>`;
   } else {
     const context = document.createElement("div");
     context.className = "message-context";
@@ -83,6 +95,7 @@ function messageRow(role, text, { pending = false, speaker, visibility = "privat
   }
   row.append(article);
   messages.append(row);
+  if (!renderingTimeline) timelineDomDirty = true;
   if (!renderingTimeline) scrollToTail({ force: role === "user" });
   return row;
 }
@@ -105,29 +118,39 @@ function renderTimeline(callEntries = [], privateEntries = []) {
     })),
   ].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
 
-  const signature = JSON.stringify(timeline);
-  if (signature === lastTimelineSignature) return;
+  const entrySignatures = timeline.map((entry) => JSON.stringify(entry));
+  const signature = JSON.stringify(entrySignatures);
+  if (signature === lastTimelineSignature && !timelineDomDirty) return;
   lastTimelineSignature = signature;
   const wasFollowingTail = shouldFollowTail;
   const previousScrollTop = conversation.scrollTop;
+  const canAppend = !timelineDomDirty
+    && renderedTimelineEntries.length > 0
+    && renderedTimelineEntries.length <= entrySignatures.length
+    && renderedTimelineEntries.every((entry, index) => entry === entrySignatures[index]);
 
   renderingTimeline = true;
-  messages.replaceChildren();
+  if (!canAppend) messages.replaceChildren();
   if (!timeline.length) {
     messageRow("assistant", "The call transcript and your private conversation will appear here together.", {
       speaker: currentAgentName,
       visibility: "private",
     });
     renderingTimeline = false;
+    renderedTimelineEntries = [];
+    timelineDomDirty = false;
     return;
   }
-  for (const entry of timeline) {
+  const entriesToRender = canAppend ? timeline.slice(renderedTimelineEntries.length) : timeline;
+  for (const entry of entriesToRender) {
     const row = messageRow(entry.role, entry.text, entry);
     if (entry.visibility === "private" && entry.role === "assistant") {
       addAssistantActions(row, entry.text);
     }
   }
   renderingTimeline = false;
+  renderedTimelineEntries = entrySignatures;
+  timelineDomDirty = false;
   requestAnimationFrame(() => {
     if (wasFollowingTail) {
       shouldFollowTail = true;
@@ -182,16 +205,27 @@ async function loadPrivateHistory() {
 }
 
 async function refreshState() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = refreshStateOnce();
+  try {
+    await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
+async function refreshStateOnce() {
   try {
     const [state, privateHistory] = await Promise.all([
       api("/api/state"),
       api("/api/private/messages"),
     ]);
     currentAgentName = state.agentName;
+    currentHarnessName = state.harness ?? "agent";
     document.querySelector("#agent-name").textContent = state.agentName;
     document.querySelector("#avatar-initial").textContent = state.agentName.slice(0, 1).toUpperCase();
     document.querySelector("#share-agent-name").textContent = state.agentName;
-    document.querySelector("#write-status").textContent = state.allowWrites ? "Prototype writes allowed" : "Codex is read-only";
+    document.querySelector("#write-status").textContent = state.allowWrites ? "Prototype writes allowed" : `${currentHarnessName} is read-only`;
     const status = document.querySelector("#meeting-status");
     const dot = document.querySelector(".presence-dot");
     status.textContent = state.meetingStatus === "joined"
@@ -200,8 +234,8 @@ async function refreshState() {
     dot.dataset.state = state.meetingStatus === "joined" ? "online" : "offline";
     agendaPanel.hidden = false;
     if (document.activeElement !== agendaText) agendaText.value = state.agenda ?? "";
-    if (!state.codexConnected) {
-      errorBox.textContent = "Connect a Codex task to use the private sidecar.";
+    if (!(state.harnessConnected ?? state.codexConnected)) {
+      errorBox.textContent = "Connect an agent task to use the private sidecar.";
       errorBox.hidden = false;
     }
     if (!privateTurnPending) renderTimeline(state.transcript, privateHistory.messages);
@@ -224,7 +258,7 @@ composer.addEventListener("submit", async (event) => {
   pending.querySelector(".tool-trace__stop").addEventListener("click", async () => {
     try {
       await api("/api/private/stop", { method: "POST", body: "{}" });
-      showToast("Stopping the private Codex turn");
+      showToast("Stopping the private agent turn");
     } catch (error) {
       showToast(error.message);
     }
@@ -366,8 +400,9 @@ saveAgenda.addEventListener("click", async () => {
   saveAgenda.setAttribute("aria-busy", "true");
   saveAgenda.textContent = "Saving…";
   try {
-    await api("/api/agenda", { method: "POST", body: JSON.stringify({ text }) });
-    showToast(`Agenda updated for ${state.agentName}`);
+    const result = await api("/api/agenda", { method: "POST", body: JSON.stringify({ text }) });
+    agendaText.value = result.agenda ?? text;
+    showToast(`Agenda updated for ${currentAgentName}`);
   } catch (error) {
     showToast(error.message);
   } finally {

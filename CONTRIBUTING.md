@@ -19,7 +19,7 @@ Use a dedicated Google account and Chrome profile for the meeting participant. K
 - Open an issue before large architectural changes.
 - Add or update tests for behavior changes.
 - Preserve the private/public boundary: sidebar messages stay silent unless the user explicitly selects **Share with room**.
-- Preserve the permission boundary: Codex is read-only unless the user explicitly enables Prototype mode.
+- Preserve the permission boundary: harnesses are read-only unless the user explicitly enables a private Prototype turn.
 - Keep adapter-specific behavior behind runtime or meeting-transport interfaces.
 - Run `npm run check` before submitting.
 
