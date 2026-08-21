@@ -229,6 +229,7 @@ The audible disclosure is a product safeguard, not legal advice.
 ```bash
 npm ci
 npm run check
+npm run check:audio
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Issues and adapter proposals are welcome.

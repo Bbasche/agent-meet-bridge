@@ -10,6 +10,7 @@ All notable changes to this project are documented here.
 - Enable the Codex app-server realtime feature explicitly and report its current API-key requirement without hanging.
 - Capture decoded remote WebRTC audio through an AudioWorklet and recover the isolated meeting browser after crashes without losing the durable agent context.
 - Add bounded meeting/repository context packs and harden passive wake-name gating against provider event reordering.
+- Add a real loopback WebSocket integration check covering session readiness, PCM conversion, wake gating, harness tools, and spoken output.
 
 ## 0.1.5 — 2026-08-21
 
