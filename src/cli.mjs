@@ -246,7 +246,7 @@ async function harnessCheck() {
   const harness = createHarness({
     provider,
     threadId: provider === "codex" ? contextId : undefined,
-    sessionId: ["claude", "hermes", "pi"].includes(provider) ? contextId : undefined,
+    sessionId: ["claude", "cursor", "hermes", "pi"].includes(provider) ? contextId : undefined,
     contextId: provider === "generic" ? contextId : undefined,
     workspace,
     allowWrites: false,
@@ -359,9 +359,12 @@ async function doctor() {
       process.exitCode = 1;
     }
     const whisperRequired = transcriptSource === "local-whisper";
-    const selectedHarnessReady = selectedHarness === "generic"
-      ? Boolean(values["harness-command"] ?? process.env.MEETING_AGENT_HARNESS_COMMAND)
-      : Boolean(harnesses[selectedHarness]);
+    const selectedHarnessCommand = values["harness-command"] ?? process.env.MEETING_AGENT_HARNESS_COMMAND;
+    const selectedHarnessReady = selectedHarnessCommand
+      ? commandExists(selectedHarnessCommand)
+      : selectedHarness === "generic"
+        ? false
+        : Boolean(harnesses[selectedHarness]);
     const selectedVoiceReady = selectedRuntime === "local"
       ? existsSync(ttsPath) && (!whisperRequired || (whisperReady && ffmpegReady && existsSync(modelPath)))
       : selectedRuntime === "openai"

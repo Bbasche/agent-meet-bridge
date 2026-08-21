@@ -213,7 +213,7 @@ interrupt()
 close()
 ```
 
-Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and durable session flags. Cursor uses JSON print mode with read-only Ask mode, then permits Agent+force only for an operator-authorized private Prototype turn. Hermes uses one-shot bot sessions and follows the new session ID produced by each resumed turn. Pi uses JSON event mode, durable sessions, and an explicit read-only tool allowlist. The generic adapter executes an explicit binary without a shell and supports `{prompt}`, `{context}`, and `{workspace}` argument templates, so Agents SDK wrappers and local MCP workers can connect without changing meeting code. See [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries and invariants.
+Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and durable session flags. Cursor uses JSON print mode with read-only Ask mode, then permits Agent+force only for an operator-authorized private Prototype turn. Its default binary is `cursor-agent`; use `--harness-command agent` if that is how your current Cursor CLI is installed. Hermes uses one-shot bot sessions and follows the new session ID produced by each resumed turn. Pi uses JSON event mode, durable sessions, and an explicit read-only tool allowlist. The generic adapter executes an explicit binary without a shell and supports `{prompt}`, `{context}`, and `{workspace}` argument templates, so Agents SDK wrappers and local MCP workers can connect without changing meeting code. See [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries and invariants.
 
 ## Safety and privacy
 
