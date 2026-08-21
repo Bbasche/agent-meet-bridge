@@ -156,6 +156,7 @@ export class LocalCodexVoiceRuntime {
   }
 
   appendAudio(pcmBytes) {
+    if (this.transcriptSource !== "local-whisper") return false;
     if (!this.connected || this.closing || !pcmBytes?.length) return false;
     const frame = Buffer.from(pcmBytes);
     const rms = pcmRms(frame);

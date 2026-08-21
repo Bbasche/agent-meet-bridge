@@ -22,7 +22,7 @@ test("passive instructions prohibit ambient replies", () => {
   });
   assert.match(prompt, /Speak only after someone addresses you by name/);
   assert.match(prompt, /return exactly SILENCE/);
-  assert.match(prompt, /Use ask_codex/);
+  assert.match(prompt, /Use ask_agent/);
 });
 
 test("Codex tool requires an explicit action class", () => {

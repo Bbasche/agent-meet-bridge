@@ -17,6 +17,9 @@ class FakeCodex {
 
   async request(method, params) {
     this.calls.push({ method, params });
+    if (method === REALTIME_METHODS.start) {
+      queueMicrotask(() => this.emit(REALTIME_NOTIFICATIONS.started, { threadId: params.threadId }));
+    }
     return {};
   }
 
@@ -80,6 +83,26 @@ test("newly created tasks can start realtime without a redundant resume", async 
   await runtime.connect();
   assert.equal(codex.calls[0].method, REALTIME_METHODS.start);
   await runtime.close();
+});
+
+test("Codex realtime surfaces backend readiness errors during connect", async () => {
+  const codex = new FakeCodex();
+  codex.request = async function request(method, params) {
+    this.calls.push({ method, params });
+    if (method === REALTIME_METHODS.start) {
+      queueMicrotask(() => this.emit(REALTIME_NOTIFICATIONS.error, {
+        threadId: params.threadId,
+        message: "realtime conversation requires API key auth",
+      }));
+    }
+    return {};
+  };
+  const runtime = new CodexRealtimeVoiceRuntime({
+    codex,
+    threadId: "thread-1",
+    instructions: "Be the meeting agent",
+  });
+  await assert.rejects(runtime.connect(), /requires API key auth/);
 });
 
 test("passive mode suppresses ambient answers and releases addressed audio", async () => {

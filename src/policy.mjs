@@ -54,7 +54,9 @@ export function utteranceAddressesAgent(text, name) {
 export function buildVoiceInstructions({
   agentName,
   mode,
+  harnessEnabled,
   codexEnabled,
+  harnessName = "engineering agent",
   nativeCodexRealtime = false,
   agendaText = "",
   additionalInstructions = "",
@@ -69,10 +71,10 @@ export function buildVoiceInstructions({
     "Sound like a thoughtful colleague: warm, direct, concise, and comfortable saying you do not know.",
     "Keep ordinary spoken answers under 30 seconds. Ask one short clarifying question when the request is materially ambiguous.",
     "Never claim that you inspected code, ran a command, changed a file, or verified a fact unless a tool result establishes it.",
-    codexEnabled && nativeCodexRealtime
+    (harnessEnabled ?? codexEnabled) && nativeCodexRealtime
       ? "You are the live voice of the connected Codex task. Delegate repository analysis, technical fact-checking, and explicitly requested prototype work to Codex, then summarize the concrete result aloud. Never narrate internal reasoning or tool mechanics."
-      : codexEnabled
-        ? "Use ask_codex when the answer depends on the connected codebase, the ongoing Codex task, repository analysis, or a requested prototype. Summarize its result aloud; the detailed work remains in the Codex task."
+      : (harnessEnabled ?? codexEnabled)
+        ? `Use ask_agent when the answer depends on the connected codebase, the ongoing ${harnessName} task, repository analysis, or a requested prototype. Summarize its result aloud; the detailed work remains in the agent task.`
       : "No coding harness is connected. Say so plainly when repository work is requested.",
     agendaText
       ? `Follow this meeting agenda without forcing transitions. Track the current topic, surface unresolved decisions when useful, and do not read the agenda aloud unless asked:\n${agendaText}`
@@ -84,12 +86,12 @@ export function buildVoiceInstructions({
   ].join(" ");
 }
 
-export function createAskCodexTool() {
+export function createAskAgentTool() {
   return {
     type: "function",
-    name: "ask_codex",
+    name: "ask_agent",
     description:
-      "Ask the connected Codex task to inspect its codebase, fact-check an implementation detail, analyze a technical question, or perform explicitly authorized prototype work.",
+      "Ask the connected engineering-agent task to inspect its codebase, fact-check an implementation detail, analyze a technical question, or perform explicitly authorized prototype work.",
     parameters: {
       type: "object",
       properties: {
@@ -107,4 +109,9 @@ export function createAskCodexTool() {
       additionalProperties: false,
     },
   };
+}
+
+// Backwards-compatible export for integrations built against v0.1.x.
+export function createAskCodexTool() {
+  return { ...createAskAgentTool(), name: "ask_codex" };
 }

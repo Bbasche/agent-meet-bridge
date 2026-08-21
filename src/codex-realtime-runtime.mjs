@@ -37,6 +37,7 @@ export class CodexRealtimeVoiceRuntime {
     resumeThread = true,
     maxInflightAudio = 20,
     followupWindowMs = 45_000,
+    startupTimeoutMs = 15_000,
     onAudio,
     onBargeIn,
     onTranscript,
@@ -55,6 +56,7 @@ export class CodexRealtimeVoiceRuntime {
     this.resumeThread = resumeThread;
     this.maxInflightAudio = maxInflightAudio;
     this.followupWindowMs = followupWindowMs;
+    this.startupTimeoutMs = startupTimeoutMs;
     this.onAudio = onAudio;
     this.onBargeIn = onBargeIn;
     this.onTranscript = onTranscript;
@@ -71,6 +73,7 @@ export class CodexRealtimeVoiceRuntime {
     this.forcedSpeech = false;
     this.userSpeechActive = false;
     this.droppedAudioFrames = 0;
+    this.startup = null;
   }
 
   async listVoices() {
@@ -87,20 +90,33 @@ export class CodexRealtimeVoiceRuntime {
       if (this.codex.ensureThread) await this.codex.ensureThread(this.threadId);
       else await this.codex.request("thread/resume", { threadId: this.threadId }, 60_000);
     }
-    await this.codex.request(REALTIME_METHODS.start, {
-      threadId: this.threadId,
-      outputModality: "audio",
-      version: this.version,
-      voice: this.voice,
-      transport: { type: "websocket" },
-      prompt: this.instructions,
-      includeStartupContext: true,
-      clientManagedHandoffs: false,
-      codexResponsesAsItems: true,
-      flushTranscriptTailOnSessionEnd: true,
-    }, 60_000);
-    this.connected = true;
-    await this.onStatus?.({ state: "connected", provider: "codex", voice: this.voice });
+    const started = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Codex realtime did not start")), this.startupTimeoutMs);
+      timeout.unref?.();
+      this.startup = {
+        resolve: () => { clearTimeout(timeout); resolve(); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      };
+    });
+    try {
+      await this.codex.request(REALTIME_METHODS.start, {
+        threadId: this.threadId,
+        outputModality: "audio",
+        version: this.version,
+        voice: this.voice,
+        transport: { type: "websocket" },
+        prompt: this.instructions,
+        includeStartupContext: true,
+        clientManagedHandoffs: false,
+        codexResponsesAsItems: true,
+        flushTranscriptTailOnSessionEnd: true,
+      }, 60_000);
+      await started;
+      this.connected = true;
+      await this.onStatus?.({ state: "connected", provider: "codex", voice: this.voice });
+    } finally {
+      this.startup = null;
+    }
   }
 
   appendAudio(pcmBytes, { sampleRate = 48_000, numChannels = 1 } = {}) {
@@ -164,6 +180,7 @@ export class CodexRealtimeVoiceRuntime {
     const on = (method, listener) => this.unsubscribe.push(this.codex.onNotification(method, listener));
     on(REALTIME_NOTIFICATIONS.started, (params) => this.#forThisThread(params, () => {
       this.connected = true;
+      this.startup?.resolve();
     }));
     on(REALTIME_NOTIFICATIONS.transcriptDelta, (params) => this.#forThisThread(params, () => {
       this.#handleTranscriptDelta(params).catch((error) => this.logger.error?.(error));
@@ -176,6 +193,7 @@ export class CodexRealtimeVoiceRuntime {
     }));
     on(REALTIME_NOTIFICATIONS.error, (params) => this.#forThisThread(params, () => {
       this.logger.error?.(`[codex realtime] ${params.message}`);
+      this.startup?.reject(new Error(params.message));
       this.onStatus?.({ state: "error", provider: "codex", message: params.message });
     }));
     on(REALTIME_NOTIFICATIONS.closed, (params) => this.#forThisThread(params, () => {

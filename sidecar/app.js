@@ -18,6 +18,7 @@ const agendaText = document.querySelector("#agenda-text");
 const saveAgenda = document.querySelector("#save-agenda");
 let desiredAction = "analyze";
 let currentAgentName = "Meeting employee";
+let currentHarnessName = "agent";
 let shouldFollowTail = true;
 let toastTimer;
 let privateTurnPending = false;
@@ -58,7 +59,7 @@ function messageRow(role, text, { pending = false, speaker, visibility = "privat
   if (pending) {
     article.className = "tool-trace";
     article.setAttribute("role", "status");
-    article.innerHTML = '<span class="tool-trace__spinner" aria-hidden="true"></span><span><strong>Working in Codex</strong><br />Using the ongoing task privately</span><button class="tool-trace__stop" type="button">Stop</button>';
+    article.innerHTML = `<span class="tool-trace__spinner" aria-hidden="true"></span><span><strong>Working in ${currentHarnessName}</strong><br />Using the ongoing task privately</span><button class="tool-trace__stop" type="button">Stop</button>`;
   } else {
     const context = document.createElement("div");
     context.className = "message-context";
@@ -188,10 +189,11 @@ async function refreshState() {
       api("/api/private/messages"),
     ]);
     currentAgentName = state.agentName;
+    currentHarnessName = state.harness ?? "agent";
     document.querySelector("#agent-name").textContent = state.agentName;
     document.querySelector("#avatar-initial").textContent = state.agentName.slice(0, 1).toUpperCase();
     document.querySelector("#share-agent-name").textContent = state.agentName;
-    document.querySelector("#write-status").textContent = state.allowWrites ? "Prototype writes allowed" : "Codex is read-only";
+    document.querySelector("#write-status").textContent = state.allowWrites ? "Prototype writes allowed" : `${currentHarnessName} is read-only`;
     const status = document.querySelector("#meeting-status");
     const dot = document.querySelector(".presence-dot");
     status.textContent = state.meetingStatus === "joined"
@@ -200,8 +202,8 @@ async function refreshState() {
     dot.dataset.state = state.meetingStatus === "joined" ? "online" : "offline";
     agendaPanel.hidden = false;
     if (document.activeElement !== agendaText) agendaText.value = state.agenda ?? "";
-    if (!state.codexConnected) {
-      errorBox.textContent = "Connect a Codex task to use the private sidecar.";
+    if (!(state.harnessConnected ?? state.codexConnected)) {
+      errorBox.textContent = "Connect an agent task to use the private sidecar.";
       errorBox.hidden = false;
     }
     if (!privateTurnPending) renderTimeline(state.transcript, privateHistory.messages);
@@ -224,7 +226,7 @@ composer.addEventListener("submit", async (event) => {
   pending.querySelector(".tool-trace__stop").addEventListener("click", async () => {
     try {
       await api("/api/private/stop", { method: "POST", body: "{}" });
-      showToast("Stopping the private Codex turn");
+      showToast("Stopping the private agent turn");
     } catch (error) {
       showToast(error.message);
     }
