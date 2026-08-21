@@ -13,6 +13,8 @@ All notable changes to this project are documented here.
 - Add a real loopback WebSocket integration check covering session readiness, PCM conversion, wake gating, harness tools, and spoken output.
 - Persist a bounded live `context.md` and include structured room plus private-operator context in the private debrief.
 - Retain high-signal context across long calls and serialize transcript writes before shutdown.
+- Reconcile raw-audio transcripts with recent Meet speaker labels and bind passive follow-ups to the original speaker.
+- Serialize inbound realtime events so asynchronous callbacks cannot reorder speaker permissions or playback.
 
 ## 0.1.5 — 2026-08-21
 

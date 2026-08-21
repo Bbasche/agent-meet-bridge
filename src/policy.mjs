@@ -51,6 +51,18 @@ export function utteranceAddressesAgent(text, name) {
   );
 }
 
+export function isDismissal(text) {
+  return /\b(?:not (?:talking|speaking|asking|addressing) (?:to )?you|do not respond|don't respond|stay quiet|remain silent)\b/i.test(
+    String(text ?? ""),
+  );
+}
+
+export function isFollowupCue(text) {
+  return /^(?:and|also|okay[, ]+and|what|where|when|why|how|which|who|can|could|would|will|do|does|did|is|are|should|then)\b/i.test(
+    String(text ?? "").trim(),
+  );
+}
+
 export function buildVoiceInstructions({
   agentName,
   mode,

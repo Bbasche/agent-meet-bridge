@@ -138,6 +138,43 @@ test("passive response waits for a late transcript after response.done", async (
   await runtime.close();
 });
 
+test("realtime transcripts borrow recent Meet speaker labels", async () => {
+  FakeSocket.instances = [];
+  const transcripts = [];
+  const runtime = makeRuntime({ mode: "active", onTranscript: (entry) => transcripts.push(entry) });
+  await runtime.connect();
+  runtime.appendCaption({ speaker: "Maya", text: "Ada, please inspect the webhook status." });
+  FakeSocket.instances[0].event({
+    type: "conversation.item.input_audio_transcription.completed",
+    transcript: "Ada, inspect the webhook status.",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(transcripts[0].speaker, "Maya");
+  await runtime.close();
+});
+
+test("passive realtime follow-ups stay with the original speaker", async () => {
+  FakeSocket.instances = [];
+  const audio = [];
+  const runtime = makeRuntime({ onAudio: (bytes) => audio.push(bytes) });
+  await runtime.connect();
+  const socket = FakeSocket.instances[0];
+
+  runtime.appendCaption({ speaker: "Maya", text: "Ada, check the webhook." });
+  socket.event({ type: "response.created", response: { id: "maya-addressed" } });
+  socket.event({ type: "conversation.item.input_audio_transcription.completed", transcript: "Ada, check the webhook." });
+  socket.event({ type: "response.done", response: { id: "maya-addressed" } });
+
+  runtime.appendCaption({ speaker: "Lee", text: "What about the plugin?" });
+  socket.event({ type: "response.created", response: { id: "lee-followup" } });
+  socket.event({ type: "response.output_audio.delta", delta: Buffer.from([9]).toString("base64") });
+  socket.event({ type: "conversation.item.input_audio_transcription.completed", transcript: "What about the plugin?" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(audio.length, 0);
+  assert.ok(socket.sent.some((event) => event.type === "response.cancel" && event.response_id === "lee-followup"));
+  await runtime.close();
+});
+
 test("provider-neutral realtime tools call the selected harness", async () => {
   FakeSocket.instances = [];
   const requests = [];

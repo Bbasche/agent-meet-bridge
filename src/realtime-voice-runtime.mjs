@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { createAskAgentTool, utteranceAddressesAgent } from "./policy.mjs";
+import { createAskAgentTool, isDismissal, isFollowupCue, utteranceAddressesAgent } from "./policy.mjs";
 
 const OPEN = WebSocket.OPEN;
 
@@ -20,6 +20,23 @@ function downsample48kTo24k(pcmBytes) {
     output.writeInt16LE(Math.round((input[source] + input[source + 1]) / 2), target);
   }
   return output;
+}
+
+function comparableWords(value) {
+  return new Set(String(value ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 1));
+}
+
+function captionSimilarity(left, right) {
+  const a = comparableWords(left);
+  const b = comparableWords(right);
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared += 1;
+  return shared / Math.min(a.size, b.size);
 }
 
 export const REALTIME_PROVIDERS = Object.freeze({
@@ -178,11 +195,14 @@ export class RealtimeVoiceRuntime {
     this.currentResponse = null;
     this.pendingResponsePermission = null;
     this.followupUntil = 0;
+    this.followupSpeaker = null;
     this.forceNextResponse = false;
     this.transcriptionTimers = new Map();
     this.latestTranscriptions = new Map();
     this.conversationId = null;
     this.startup = null;
+    this.captionHints = [];
+    this.eventQueue = Promise.resolve();
   }
 
   get connected() {
@@ -217,6 +237,20 @@ export class RealtimeVoiceRuntime {
       return false;
     }
     this.#send({ type: "input_audio_buffer.append", audio: audio.toString("base64") });
+    return true;
+  }
+
+  appendCaption(caption) {
+    const text = typeof caption === "object" && caption ? caption.text : caption;
+    const speaker = typeof caption === "object" && caption
+      ? String(caption.speaker ?? "Meeting").replace(/\s+/g, " ").trim().slice(0, 80) || "Meeting"
+      : "Meeting";
+    const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+    if (!clean || speaker === "Meeting" || speaker.toLowerCase() === this.agentName.toLowerCase()) return false;
+    const now = Date.now();
+    this.captionHints = this.captionHints.filter((hint) => now - hint.at < 12_000);
+    this.captionHints.push({ speaker, text: clean, at: now });
+    if (this.captionHints.length > 20) this.captionHints.splice(0, this.captionHints.length - 20);
     return true;
   }
 
@@ -258,18 +292,21 @@ export class RealtimeVoiceRuntime {
     });
     this.socket = socket;
     socket.on("message", (data, isBinary) => {
-      if (isBinary) {
-        this.onAudio?.(Buffer.from(data), { sampleRate: this.provider.outputRate, numChannels: 1 });
-        return;
-      }
-      let event;
-      try {
-        event = JSON.parse(data.toString());
-      } catch {
-        this.logger.warn?.(`[${this.provider.id}] ignored an invalid JSON event`);
-        return;
-      }
-      this.#handleEvent(event).catch((error) => {
+      const handle = async () => {
+        if (isBinary) {
+          await this.onAudio?.(Buffer.from(data), { sampleRate: this.provider.outputRate, numChannels: 1 });
+          return;
+        }
+        let event;
+        try {
+          event = JSON.parse(data.toString());
+        } catch {
+          this.logger.warn?.(`[${this.provider.id}] ignored an invalid JSON event`);
+          return;
+        }
+        await this.#handleEvent(event);
+      };
+      this.eventQueue = this.eventQueue.then(handle, handle).catch((error) => {
         this.logger.error?.(`[${this.provider.id}] ${error.message}`);
         this.onError?.(error);
       });
@@ -453,11 +490,21 @@ export class RealtimeVoiceRuntime {
   async #handleInputTranscript(text) {
     const clean = String(text ?? "").trim();
     if (!clean) return;
-    await this.onTranscript?.({ speaker: "Meeting", text: clean, kind: "speech" });
+    const speaker = this.#matchCaptionSpeaker(clean);
+    await this.onTranscript?.({ speaker, text: clean, kind: "speech" });
     if (this.mode !== "passive") return;
-    const directlyAddressed = utteranceAddressesAgent(clean, this.agentName);
-    if (directlyAddressed) this.followupUntil = Date.now() + 45_000;
-    const allowed = directlyAddressed || Date.now() < this.followupUntil;
+    const dismissed = isDismissal(clean);
+    const directlyAddressed = utteranceAddressesAgent(clean, this.agentName) && !dismissed;
+    if (directlyAddressed) {
+      this.followupUntil = Date.now() + 45_000;
+      this.followupSpeaker = speaker;
+    } else if (speaker !== "Meeting" && this.followupSpeaker && speaker !== this.followupSpeaker) {
+      this.followupUntil = 0;
+      this.followupSpeaker = null;
+    }
+    const sameSpeaker = speaker === "Meeting" || speaker === this.followupSpeaker;
+    const inFollowup = !dismissed && sameSpeaker && isFollowupCue(clean) && Date.now() < this.followupUntil;
+    const allowed = directlyAddressed || inFollowup;
     if (this.currentResponse && !this.currentResponse.decided) {
       clearTimeout(this.currentResponse.cleanupTimer);
       this.currentResponse.decided = true;
@@ -478,6 +525,23 @@ export class RealtimeVoiceRuntime {
       // arrives first, so carry this decision into the next response.
       this.pendingResponsePermission = allowed;
     }
+  }
+
+  #matchCaptionSpeaker(text) {
+    const now = Date.now();
+    this.captionHints = this.captionHints.filter((hint) => now - hint.at < 12_000);
+    let bestIndex = -1;
+    let bestScore = 0;
+    for (let index = 0; index < this.captionHints.length; index += 1) {
+      const score = captionSimilarity(text, this.captionHints[index].text);
+      if (score >= bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+    if (bestIndex < 0 || bestScore < 0.55) return "Meeting";
+    const [match] = this.captionHints.splice(bestIndex, 1);
+    return match.speaker;
   }
 
   async #handleFunctionCall(event) {

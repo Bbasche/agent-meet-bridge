@@ -5,6 +5,8 @@ import {
   createAskCodexTool,
   turnCanWrite,
   utteranceAddressesAgent,
+  isDismissal,
+  isFollowupCue,
   validateMeetingUrl,
 } from "../src/policy.mjs";
 
@@ -12,6 +14,12 @@ test("wake-name matching respects word boundaries and case", () => {
   assert.equal(utteranceAddressesAgent("Grok Bot, check that in Codex", "Grok Bot"), true);
   assert.equal(utteranceAddressesAgent("hey grok bot can you help", "Grok Bot"), true);
   assert.equal(utteranceAddressesAgent("the grok botanical demo", "Grok Bot"), false);
+});
+
+test("passive follow-up cues exclude explicit dismissals", () => {
+  assert.equal(isFollowupCue("What about the plugin?"), true);
+  assert.equal(isFollowupCue("The plugin is ready."), false);
+  assert.equal(isDismissal("Ada, I'm not talking to you."), true);
 });
 
 test("passive instructions prohibit ambient replies", () => {
