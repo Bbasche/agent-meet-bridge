@@ -33,6 +33,40 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
   const attachedTrackIds = new Set();
   const remoteSources = new Map();
 
+  function silenceMediaElement(element) {
+    if (!(element instanceof HTMLMediaElement)) return;
+    if (!element.muted) element.muted = true;
+    if (element.volume !== 0) element.volume = 0;
+  }
+
+  function silenceMediaTree(root) {
+    if (root instanceof HTMLMediaElement) silenceMediaElement(root);
+    root?.querySelectorAll?.("audio,video").forEach(silenceMediaElement);
+  }
+
+  const playbackSilencer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.target instanceof HTMLMediaElement) silenceMediaElement(mutation.target);
+      mutation.addedNodes.forEach((node) => silenceMediaTree(node));
+    }
+  });
+  const startPlaybackSilencer = () => {
+    silenceMediaTree(document);
+    if (document.documentElement) {
+      playbackSilencer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["muted", "volume"],
+      });
+    }
+  };
+  document.addEventListener("play", (event) => silenceMediaElement(event.target), true);
+  document.addEventListener("volumechange", (event) => silenceMediaElement(event.target), true);
+  if (document.documentElement) startPlaybackSilencer();
+  else document.addEventListener("DOMContentLoaded", startPlaybackSilencer, { once: true });
+  window.__meetingAgentSilencesLocalPlayback = true;
+
   function bytesToBase64(bytes) {
     let binary = "";
     for (let offset = 0; offset < bytes.length; offset += 8192) {

@@ -25,6 +25,7 @@ Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness
 | Private backchannel | Token-authenticated `127.0.0.1` sidebar; private by default |
 | Call record | Timestamped room transcript, private audit trail, live context snapshot, and final debrief |
 | Camera safety | Physical camera acquisition is blocked; the Meet camera control is verified off |
+| Echo safety | Bot media elements are silenced locally while decoded WebRTC tracks remain available to the agent |
 | Code access | Read-only by default; writes require launch-time permission and a private `Prototype` turn |
 
 The Mac running the bridge must remain awake and online.

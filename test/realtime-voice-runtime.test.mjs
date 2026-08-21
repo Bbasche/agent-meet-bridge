@@ -82,6 +82,51 @@ test("realtime connect rejects a provider session error before readiness", async
   await runtime.close();
 });
 
+test("audio buffers while the socket is open but the session is not ready", async () => {
+  class DelayedReadySocket extends FakeSocket {
+    send(message) {
+      this.sent.push(JSON.parse(message));
+    }
+  }
+  FakeSocket.instances = [];
+  const runtime = makeRuntime({ WebSocketImpl: DelayedReadySocket });
+  const connecting = runtime.connect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const socket = FakeSocket.instances[0];
+  assert.equal(socket.sent[0].type, "session.update");
+  assert.equal(runtime.appendAudio(Buffer.alloc(9_600)), false);
+  assert.equal(socket.sent.some((event) => event.type === "input_audio_buffer.append"), false);
+  socket.event({ type: "session.updated", session: { id: "delayed-session" } });
+  await connecting;
+  assert.equal(socket.sent.at(-1).type, "input_audio_buffer.append");
+  await runtime.close();
+});
+
+test("disconnect buffers audio and flushes it after a fresh session handshake", async () => {
+  FakeSocket.instances = [];
+  const statuses = [];
+  const runtime = makeRuntime({
+    reconnect: true,
+    reconnectMaxDelayMs: 5,
+    onStatus: (status) => statuses.push(status.state),
+  });
+  await runtime.connect();
+  const first = FakeSocket.instances[0];
+  first.close(1006, "network drop");
+  assert.equal(runtime.appendAudio(Buffer.alloc(9_600)), false);
+  const deadline = Date.now() + 500;
+  while (FakeSocket.instances.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(FakeSocket.instances.length, 2);
+  const second = FakeSocket.instances[1];
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(second.sent.some((event) => event.type === "input_audio_buffer.append"));
+  assert.ok(statuses.includes("reconnecting"));
+  assert.equal(statuses.at(-1), "connected");
+  await runtime.close();
+});
+
 test("passive realtime buffers ambient output and releases addressed output", async () => {
   FakeSocket.instances = [];
   const audio = [];

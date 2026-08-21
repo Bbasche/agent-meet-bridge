@@ -37,6 +37,15 @@ try {
   page.on("console", (message) => console.log(`[browser] ${message.text()}`));
   page.on("pageerror", (error) => console.error(`[browser] ${error.message}`));
   await page.goto(`http://127.0.0.1:${address.port}`);
+  const playbackIsSilent = await page.evaluate(async () => {
+    const element = document.createElement("audio");
+    element.muted = false;
+    element.volume = 1;
+    document.body.append(element);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return element.muted && element.volume === 0 && window.__meetingAgentSilencesLocalPlayback === true;
+  });
+  if (!playbackIsSilent) throw new Error("Bot media elements were not silenced locally");
   await page.evaluate(async () => {
     const receiver = new RTCPeerConnection();
     const audio = new AudioContext({ sampleRate: 48_000 });
@@ -58,6 +67,7 @@ try {
     new Promise((_, reject) => setTimeout(() => reject(new Error(`No non-silent 100ms PCM frame arrived (${frameCount} frames, peak RMS ${Math.round(peakRms)})`)), 15_000)),
   ]);
   console.log(`✓ Remote WebRTC audio capture: ${result.bytes} bytes, RMS ${Math.round(result.rms)}`);
+  console.log("✓ Local bot playback is silenced without muting WebRTC capture");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

@@ -186,6 +186,7 @@ export class RealtimeVoiceRuntime {
     this.maxBufferedAudioBytes = maxBufferedAudioBytes ?? config.inputRate * 2 * 2;
     this.startupTimeoutMs = startupTimeoutMs;
     this.socket = null;
+    this.sessionReady = false;
     this.connectPromise = null;
     this.closing = false;
     this.reconnectTimer = null;
@@ -206,12 +207,12 @@ export class RealtimeVoiceRuntime {
   }
 
   get connected() {
-    return this.socket?.readyState === OPEN;
+    return this.socket?.readyState === OPEN && this.sessionReady;
   }
 
   async connect() {
-    if (this.connected) return;
     if (this.connectPromise) return this.connectPromise;
+    if (this.connected) return;
     this.closing = false;
     this.connectPromise = this.#open();
     try {
@@ -277,6 +278,7 @@ export class RealtimeVoiceRuntime {
     this.startup = null;
     const socket = this.socket;
     this.socket = null;
+    this.sessionReady = false;
     if (socket && socket.readyState < 2) socket.close(1000, "meeting ended");
     await this.onStatus?.({ state: "closed", provider: this.provider.id });
   }
@@ -291,6 +293,7 @@ export class RealtimeVoiceRuntime {
       headers: this.provider.headers(this.apiKey),
     });
     this.socket = socket;
+    this.sessionReady = false;
     socket.on("message", (data, isBinary) => {
       const handle = async () => {
         if (isBinary) {
@@ -338,8 +341,9 @@ export class RealtimeVoiceRuntime {
           tools: this.harnessEnabled ? [createAskAgentTool()] : [],
           reasoningEffort: this.reasoningEffort,
         }),
-      });
+      }, { beforeReady: true });
       await ready;
+      this.sessionReady = true;
       this.reconnectAttempts = 0;
       this.#flushAudio();
       await this.onStatus?.({ state: "connected", provider: this.provider.id });
@@ -351,31 +355,35 @@ export class RealtimeVoiceRuntime {
   #handleClose(socket, code, reason) {
     if (this.socket !== socket) return;
     this.socket = null;
+    this.sessionReady = false;
     this.startup?.reject(new Error(`${this.provider.id} realtime disconnected before session readiness`));
     if (this.closing) return;
-    this.onStatus?.({ state: "reconnecting", provider: this.provider.id });
     this.logger.warn?.(`[${this.provider.id}] disconnected (${code}) ${reason.toString()}`);
-    if (!this.reconnect) return;
+    if (!this.reconnect) {
+      this.onStatus?.({ state: "disconnected", provider: this.provider.id });
+      return;
+    }
+    this.#scheduleReconnect("socket-closed");
+  }
+
+  #scheduleReconnect(reason) {
+    if (this.closing || !this.reconnect || this.reconnectTimer) return;
     const attempt = ++this.reconnectAttempts;
     const delay = Math.min(this.reconnectMaxDelayMs, 500 * (2 ** Math.min(attempt - 1, 6)));
     const jitter = Math.floor(Math.random() * Math.min(500, delay / 4));
-    clearTimeout(this.reconnectTimer);
+    this.onStatus?.({ state: "reconnecting", provider: this.provider.id, attempt, delayMs: delay + jitter, reason });
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.connect().catch((error) => {
         this.logger.error?.(`[${this.provider.id}] reconnect failed: ${error.message}`);
-        if (!this.closing) this.#scheduleReconnect();
+        const failedSocket = this.socket;
+        this.socket = null;
+        this.sessionReady = false;
+        if (failedSocket && failedSocket.readyState < 2) failedSocket.close(1011, "session setup failed");
+        this.#scheduleReconnect("handshake-failed");
       });
     }, delay + jitter);
     this.reconnectTimer.unref?.();
-  }
-
-  #scheduleReconnect() {
-    const socket = this.socket;
-    if (socket) this.#handleClose(socket, 1006, Buffer.from("reconnect failed"));
-    else {
-      this.socket = { close() {}, readyState: 3 };
-      this.#handleClose(this.socket, 1006, Buffer.from("reconnect failed"));
-    }
   }
 
   #bufferAudio(audio) {
@@ -569,8 +577,11 @@ export class RealtimeVoiceRuntime {
     this.#send({ type: "response.create" });
   }
 
-  #send(message) {
-    if (!this.connected) throw new Error(`${this.provider.id} realtime is not connected`);
+  #send(message, { beforeReady = false } = {}) {
+    const socketOpen = this.socket?.readyState === OPEN;
+    if (!socketOpen || (!beforeReady && !this.sessionReady)) {
+      throw new Error(`${this.provider.id} realtime is not connected`);
+    }
     this.socket.send(JSON.stringify(message));
   }
 }

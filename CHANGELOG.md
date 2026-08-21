@@ -15,6 +15,9 @@ All notable changes to this project are documented here.
 - Retain high-signal context across long calls and serialize transcript writes before shutdown.
 - Reconcile raw-audio transcripts with recent Meet speaker labels and bind passive follow-ups to the original speaker.
 - Serialize inbound realtime events so asynchronous callbacks cannot reorder speaker permissions or playback.
+- Buffer meeting PCM until reconnecting providers acknowledge the configured voice session.
+- Close failed handshake sockets and use one bounded retry supervisor for realtime reconnects.
+- Silence the bot browser's local media playback without using Chrome's capture-breaking mute flag.
 
 ## 0.1.5 — 2026-08-21
 
