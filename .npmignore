@@ -1,0 +1,11 @@
+.env
+data/
+node_modules/
+*.tgz
+
+# Abandoned managed-transport spike retained only in the local working copy.
+public/
+src/recall-client.mjs
+src/server.mjs
+src/tunnel.mjs
+test/recall-client.test.mjs

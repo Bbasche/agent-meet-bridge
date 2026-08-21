@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f6f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171a18" media="(prefers-color-scheme: dark)" />
+    <title>Private meeting sidecar</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#conversation">Skip to private conversation</a>
+    <div class="sidecar-shell">
+      <header class="sidecar-header">
+        <div class="identity">
+          <div class="avatar" aria-hidden="true"><span id="avatar-initial">J</span></div>
+          <div class="identity-copy">
+            <h1 id="agent-name">Meeting employee</h1>
+            <div class="presence-line">
+              <span class="presence-dot" aria-hidden="true"></span>
+              <span id="meeting-status">Connecting to meeting</span>
+            </div>
+          </div>
+        </div>
+        <span class="private-badge">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" /></svg>
+          <span>Private</span>
+        </span>
+      </header>
+
+      <div class="privacy-notice" role="note">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v5c0 5.1 3.4 8.4 8 10 4.6-1.6 8-4.9 8-10V6l-8-3Z" /><path d="m9 12 2 2 4-5" /></svg>
+        <p><strong>Only you and this task can see this.</strong> Nothing is heard in the room unless you choose “Share with room.”</p>
+      </div>
+
+      <details id="agenda-panel" class="agenda-panel" hidden>
+        <summary>
+          <span>Agenda</span>
+          <span class="agenda-panel__hint">Open while someone else is talking</span>
+        </summary>
+        <div class="agenda-panel__editor">
+          <label class="sr-only" for="agenda-text">Meeting agenda</label>
+          <textarea id="agenda-text" rows="6" maxlength="16000"></textarea>
+          <button id="save-agenda" type="button">Save agenda</button>
+        </div>
+      </details>
+
+      <main id="conversation" class="conversation" tabindex="-1">
+        <ol id="messages" class="message-list" aria-live="polite" aria-relevant="additions">
+          <li class="message-row message-row--assistant">
+            <article class="message message--assistant">
+              <p>The call transcript and your private conversation will appear here together.</p>
+            </article>
+          </li>
+        </ol>
+        <button id="scroll-tail" class="scroll-tail" type="button" hidden>Jump to latest</button>
+      </main>
+
+      <footer class="composer-shell">
+        <div id="composer-error" class="composer-error" role="alert" hidden></div>
+        <form id="composer" class="composer">
+          <label class="sr-only" for="message-input">Private message</label>
+          <textarea
+            id="message-input"
+            name="message"
+            rows="2"
+            maxlength="8000"
+            placeholder="Ask privately…"
+            autocomplete="off"
+          ></textarea>
+          <div class="composer-actions">
+            <div class="composer-tools">
+              <button id="dictate" class="tool-button" type="button" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8" /></svg>
+                <span>Dictate</span>
+              </button>
+              <div class="action-choice" aria-label="Codex action">
+                <button class="action-choice__button is-selected" type="button" data-action="analyze" aria-pressed="true">Analyze</button>
+                <button class="action-choice__button" type="button" data-action="prototype" aria-pressed="false">Prototype</button>
+              </div>
+            </div>
+            <button id="send" class="send-button" type="submit">
+              <span>Send</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></svg>
+            </button>
+          </div>
+        </form>
+        <p class="composer-hint"><kbd>⌘</kbd><span>+</span><kbd>Enter</kbd> to send · <span id="write-status">Private by default</span></p>
+      </footer>
+    </div>
+
+    <dialog id="share-dialog" class="share-dialog" aria-labelledby="share-title">
+      <form id="share-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Public audio</p>
+            <h2 id="share-title">Share with the room?</h2>
+          </div>
+          <button id="close-share" class="icon-button" type="button" aria-label="Close share dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <p class="dialog-copy"><span id="share-agent-name">The meeting employee</span> will speak this text aloud. Edit it first if you want a shorter answer.</p>
+        <label for="share-text">Text to speak</label>
+        <textarea id="share-text" rows="7" maxlength="2000"></textarea>
+        <div class="dialog-footer">
+          <span id="share-count" class="character-count">0 / 2,000</span>
+          <div class="dialog-actions">
+            <button id="cancel-share" class="secondary-button" type="button">Keep private</button>
+            <button class="primary-button" type="submit">Speak in meeting</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

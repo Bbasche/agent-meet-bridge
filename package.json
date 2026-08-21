@@ -1,0 +1,43 @@
+{
+  "name": "agent-meet-bridge",
+  "version": "0.1.5",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent-meet-bridge": "src/cli.mjs"
+  },
+  "description": "Bridge a named Google Meet participant to a durable coding-agent task with live transcripts and a private sidecar.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bbasche/agent-meet-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Bbasche/agent-meet-bridge/issues"
+  },
+  "homepage": "https://github.com/Bbasche/agent-meet-bridge#readme",
+  "keywords": [
+    "ai-agent",
+    "codex",
+    "google-meet",
+    "meeting-bot",
+    "voice-agent"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "assistant": "node src/cli.mjs",
+    "sidecar": "node scripts/preview-sidecar.mjs",
+    "setup:local": "node scripts/setup-local.mjs",
+    "threads": "node src/cli.mjs threads",
+    "doctor": "node src/cli.mjs doctor",
+    "realtime-check": "node src/cli.mjs realtime-check",
+    "test": "node --test test/cli.test.mjs test/policy.test.mjs test/local-transport.test.mjs test/codex-realtime-runtime.test.mjs test/local-codex-voice-runtime.test.mjs test/sidecar-server.test.mjs test/transcript-store.test.mjs",
+    "check": "node --check src/cli.mjs && node --check src/browser-meet-transport.mjs && node --check src/codex-app-server.mjs && node --check src/codex-realtime-runtime.mjs && node --check src/local-codex-voice-runtime.mjs && node --check src/grok-voice-runtime.mjs && node --check src/sidecar-server.mjs && node --check sidecar/app.js && npm test"
+  },
+  "dependencies": {
+    "playwright": "1.62.1",
+    "ws": "8.21.3"
+  }
+}
