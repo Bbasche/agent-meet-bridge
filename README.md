@@ -9,7 +9,7 @@
 
 Bring a named, addressable coding agent into Google Meet. The agent joins as a participant, follows an agenda, answers when called by name, keeps a durable coding-task context, saves the call transcript, and gives the operator a private silent backchannel.
 
-Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness, speech, and sidecar boundaries are now independently selectable: Codex, Claude Code, Hermes, Pi, and a shell-free generic CLI adapter implement the same durable harness contract, while local speech, OpenAI Realtime, Grok Voice, and experimental Codex Realtime share one meeting bridge.
+Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness, speech, and sidecar boundaries are now independently selectable: Codex, Claude Code, Cursor, Hermes, Pi, and a shell-free generic CLI adapter implement the same durable harness contract, while local speech, OpenAI Realtime, Grok Voice, and experimental Codex Realtime share one meeting bridge.
 
 > **Early release:** this is a working macOS prototype, not a hosted meeting-bot service. Google Meet DOM changes can break automation. Use it with informed participant consent and supervise it during calls.
 
@@ -20,7 +20,7 @@ Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness
 | Meeting presence | Dedicated Playwright-controlled Chrome profile; headed or headless |
 | Addressability | Passive wake-name policy with a short follow-up window |
 | Input transcript | Meet live captions or realtime-provider transcription, mirrored into the sidecar and Markdown/JSONL |
-| Agent harness | Durable Codex, Claude Code, Hermes, or Pi sessions |
+| Agent harness | Durable Codex, Claude Code, Cursor, Hermes, or Pi sessions |
 | Spoken replies | Local macOS speech, OpenAI Realtime, Grok Voice, or experimental Codex Realtime |
 | Private backchannel | Token-authenticated `127.0.0.1` sidebar; private by default |
 | Call record | Timestamped room transcript, private audit trail, live context snapshot, and final debrief |
@@ -53,7 +53,7 @@ The public/private boundary is enforced in the client, not only in the prompt. P
 - Node.js 22 or later
 - Google Chrome
 - Xcode Command Line Tools (`swiftc`) for local speech output
-- At least one supported harness: Codex CLI, Claude Code, Hermes, Pi, or an explicitly configured generic CLI
+- At least one supported harness: Codex CLI, Claude Code, Cursor Agent CLI, Hermes, Pi, or an explicitly configured generic CLI
 - A dedicated Google account for the meeting participant is strongly recommended
 
 Apple Silicon is recommended. Linux and Windows speech adapters are roadmap items.
@@ -102,7 +102,7 @@ Omit `--headless` while debugging Meet automation. Headless mode is recommended 
 
 ## Durable agent tasks
 
-The bridge is BYO-agent: `--name` sets the wake name and participant identity, while `--instructions` supplies optional persona and role guidance. Choose `--harness codex`, `claude`, `hermes`, `pi`, or `generic`. Pass `--harness-context` to resume an existing task/session, or omit it to create a dedicated context. The same context owns voice-triggered and private-sidecar turns and remains available after the meeting.
+The bridge is BYO-agent: `--name` sets the wake name and participant identity, while `--instructions` supplies optional persona and role guidance. Choose `--harness codex`, `claude`, `cursor`, `hermes`, `pi`, or `generic`. Pass `--harness-context` to resume an existing task/session, or omit it to create a dedicated context. The same context owns voice-triggered and private-sidecar turns and remains available after the meeting.
 
 To keep the same agent across rejoins, set the task once in the ignored `.env` file:
 
@@ -119,7 +119,7 @@ Check a connector without joining a meeting:
 npm run assistant -- harness-check --harness hermes --workspace /path/to/repository
 ```
 
-Codex and Hermes have been exercised end to end by the project readiness command. Claude Code and Pi use their supported JSON/session interfaces; availability still depends on the local organization, subscription, or API credentials.
+Codex and Hermes have been exercised end to end by the project readiness command. Claude Code, Cursor, and Pi use their supported JSON/session interfaces; availability still depends on the local organization, subscription, or API credentials.
 
 The generic adapter is intentionally low-level. It never invokes a shell, but the operator-supplied executable owns its own sandbox, credentials, and permission enforcement. Treat it as trusted local code.
 
@@ -147,7 +147,7 @@ Copy `.env.example` to `.env`. CLI flags take precedence.
 | `MEETING_AGENT_NAME` | Addressable participant name | `Agent` |
 | `MEETING_AGENT_INSTRUCTIONS` | Optional persona or role guidance | none |
 | `MEETING_AGENT_MODE` | `passive`, `active`, or `unrestricted` | `passive` |
-| `MEETING_AGENT_HARNESS` | `codex`, `claude`, `hermes`, `pi`, or `generic` | `codex` |
+| `MEETING_AGENT_HARNESS` | `codex`, `claude`, `cursor`, `hermes`, `pi`, or `generic` | `codex` |
 | `MEETING_AGENT_HARNESS_CONTEXT_ID` | Resume a durable harness context | create a context |
 | `MEETING_AGENT_WORKSPACE` | Repository the harness may inspect | current directory |
 | `MEETING_AGENT_RUNTIME` | `local`, `codex`, `openai`, or `grok` | `local` |
@@ -211,14 +211,14 @@ interrupt()
 close()
 ```
 
-Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and durable session flags. Hermes uses one-shot bot sessions and follows the new session ID produced by each resumed turn. Pi uses JSON event mode, durable sessions, and an explicit read-only tool allowlist. The generic adapter executes an explicit binary without a shell and supports `{prompt}`, `{context}`, and `{workspace}` argument templates, so Cursor, Agents SDK wrappers, and local MCP workers can connect without changing meeting code. Cursor remains generic because its current print-mode CLI exposes all tools and does not offer a read-only allowlist. See [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries and invariants.
+Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and durable session flags. Cursor uses JSON print mode with read-only Ask mode, then permits Agent+force only for an operator-authorized private Prototype turn. Hermes uses one-shot bot sessions and follows the new session ID produced by each resumed turn. Pi uses JSON event mode, durable sessions, and an explicit read-only tool allowlist. The generic adapter executes an explicit binary without a shell and supports `{prompt}`, `{context}`, and `{workspace}` argument templates, so Agents SDK wrappers and local MCP workers can connect without changing meeting code. See [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries and invariants.
 
 ## Safety and privacy
 
 - Obtain any consent required by participants and applicable law before recording or transcribing.
 - Use a dedicated Google account and Chrome profile.
 - Cookies, transcripts, audio, model weights, compiled helpers, and `.env` stay under ignored local paths.
-- Harness turns are read-only by default. Each local harness still inherits whatever files and credentials its own CLI can read; use an isolated workspace and review that CLI's configuration. Hermes read-only turns use safe mode because its one-shot mode bypasses tool approvals.
+- Harness turns are read-only by default. Each local harness still inherits whatever files and credentials its own CLI can read; use an isolated workspace and review that CLI's configuration. Cursor uses Ask mode for read turns. Hermes read-only turns use safe mode because its one-shot mode bypasses tool approvals.
 - Spoken requests cannot authorize workspace writes.
 - `--allow-writes` applies only to an explicitly private `Prototype` request.
 - Treat captions and meeting speech as untrusted input; never place secrets in the agenda or transcript.

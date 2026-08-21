@@ -1,15 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ClaudeCodeHarness } from "../src/harnesses/claude-code-harness.mjs";
+import { CursorHarness } from "../src/harnesses/cursor-harness.mjs";
 import { HermesHarness } from "../src/harnesses/hermes-harness.mjs";
 import { GenericCliHarness } from "../src/harnesses/generic-cli-harness.mjs";
 import { PiHarness } from "../src/harnesses/pi-harness.mjs";
 import { createHarness, HARNESS_PROVIDERS } from "../src/harnesses/registry.mjs";
 
 test("harness registry exposes provider-neutral adapters", () => {
-  assert.deepEqual(HARNESS_PROVIDERS, ["codex", "claude", "hermes", "pi", "generic"]);
+  assert.deepEqual(HARNESS_PROVIDERS, ["codex", "claude", "cursor", "hermes", "pi", "generic"]);
   assert.equal(createHarness({ provider: "claude", workspace: "/tmp" }).id, "claude");
-  assert.throws(() => createHarness({ provider: "cursor" }), /Unsupported harness/);
+  assert.equal(createHarness({ provider: "cursor", workspace: "/tmp" }).id, "cursor");
 });
 
 test("Pi preserves its JSON session and constrains read-only tools", async () => {
@@ -124,6 +125,41 @@ test("Claude Code preserves one session and constrains read-only tools", async (
   assert.ok(calls[0].args.includes("dontAsk"));
   assert.ok(calls[0].args.includes("Read,Glob,Grep,WebSearch,WebFetch"));
   assert.deepEqual(calls[0].args.slice(-2), ["--", "Inspect this"]);
+});
+
+test("Cursor uses Ask mode unless a private prototype turn is authorized", async () => {
+  const calls = [];
+  const runner = async (request) => {
+    calls.push(request);
+    return {
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: `reply-${calls.length}`,
+        session_id: "cursor-session-1",
+      }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const harness = new CursorHarness({
+    workspace: "/tmp/workspace",
+    allowWrites: true,
+    runner,
+  });
+  await harness.start({ instructions: "Meeting role" });
+  const read = await harness.ask({ prompt: "Inspect this", allowWrites: false });
+  assert.equal(read.text, "reply-1");
+  assert.equal(read.contextId, "cursor-session-1");
+  assert.deepEqual(calls[0].args.slice(0, 5), ["--mode", "ask", "--print", "--output-format", "json"]);
+  assert.equal(calls[0].args.includes("--force"), false);
+
+  await harness.ask({ prompt: "Prototype this", allowWrites: true });
+  assert.deepEqual(calls[1].args.slice(0, 2), ["--mode", "agent"]);
+  assert.ok(calls[1].args.includes("--force"));
+  assert.ok(calls[1].args.includes("--resume"));
+  assert.ok(calls[1].args.includes("cursor-session-1"));
 });
 
 test("Hermes rolls its durable resume ID forward and defaults to safe mode", async () => {

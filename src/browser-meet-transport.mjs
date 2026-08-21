@@ -492,29 +492,54 @@ export class BrowserMeetTransport {
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.reconnecting = false;
+    this.presenceCheckPending = false;
   }
 
   async #checkPresence() {
-    if (!this.page || this.page.isClosed() || this.aloneTriggered) return;
-    const snapshot = await this.page.evaluate(() => ({
-      bodyText: document.body?.innerText ?? "",
-      ariaLabels: Array.from(document.querySelectorAll("[aria-label]"), (element) => element.getAttribute("aria-label") ?? ""),
-    })).catch(() => null);
-    if (!snapshot) return;
-    const now = Date.now();
-    const next = nextMeetingPresence(
-      { seenOthers: this.seenOthers, aloneSince: this.aloneSince },
-      meetingPopulationFromSnapshot(snapshot),
-      { now, timeoutMs: this.aloneTimeoutMs },
-    );
-    this.seenOthers = next.seenOthers;
-    this.aloneSince = next.aloneSince;
-    if (!next.shouldLeave) return;
-    this.aloneTriggered = true;
-    await this.onAlone?.({
-      reason: next.reason,
-      aloneForMs: next.aloneSince === null ? 0 : now - next.aloneSince,
-    });
+    if (!this.page || this.page.isClosed() || this.aloneTriggered || this.presenceCheckPending) return;
+    this.presenceCheckPending = true;
+    try {
+      const snapshot = await this.page.evaluate(() => {
+        if (!document.body) return { bodyText: "", ariaLabels: [] };
+        const signalPattern = /\b(?:you left the meeting|meeting (?:has )?ended|return to home screen|no one else is here|you(?:'re| are) the only one here|waiting for others to join)\b/i;
+        const signals = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let inspected = 0;
+        while (signals.length < 20 && inspected < 20_000) {
+          const node = walker.nextNode();
+          if (!node) break;
+          inspected += 1;
+          const text = String(node.nodeValue ?? "").replace(/\s+/g, " ").trim();
+          if (text.length <= 160 && signalPattern.test(text)) signals.push(text);
+        }
+        const ariaLabels = [];
+        const labeled = document.querySelectorAll(
+          '[aria-label*="participant" i], [aria-label*="people" i], [aria-label*="everyone" i]',
+        );
+        for (let index = 0; index < labeled.length && ariaLabels.length < 100; index += 1) {
+          const label = labeled[index].getAttribute("aria-label");
+          if (label && label.length <= 200) ariaLabels.push(label);
+        }
+        return { bodyText: signals.join(" "), ariaLabels };
+      }).catch(() => null);
+      if (!snapshot) return;
+      const now = Date.now();
+      const next = nextMeetingPresence(
+        { seenOthers: this.seenOthers, aloneSince: this.aloneSince },
+        meetingPopulationFromSnapshot(snapshot),
+        { now, timeoutMs: this.aloneTimeoutMs },
+      );
+      this.seenOthers = next.seenOthers;
+      this.aloneSince = next.aloneSince;
+      if (!next.shouldLeave) return;
+      this.aloneTriggered = true;
+      await this.onAlone?.({
+        reason: next.reason,
+        aloneForMs: next.aloneSince === null ? 0 : now - next.aloneSince,
+      });
+    } finally {
+      this.presenceCheckPending = false;
+    }
   }
 
   #startPresenceMonitor() {

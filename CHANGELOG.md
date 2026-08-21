@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
-- Add provider-neutral durable harness adapters for Codex, Claude Code, Hermes, and Pi, plus a shell-free generic CLI adapter.
+- Add provider-neutral durable harness adapters for Codex, Claude Code, Cursor, Hermes, and Pi, plus a shell-free generic CLI adapter.
 - Add one shared OpenAI-compatible realtime voice core for OpenAI Realtime and Grok Voice.
 - Add audio-rate conversion, passive output gating, function calls, reconnect buffering, and provider readiness checks.
 - Enable the Codex app-server realtime feature explicitly and report its current API-key requirement without hanging.
@@ -22,6 +22,7 @@ All notable changes to this project are documented here.
 - Block physical camera acquisition even during Meet's independent pre-join media probes and verify the synthetic microphone/camera shape in a real browser.
 - Keep unparsed failed harness stdout and stderr out of surfaced errors so private meeting or repository content cannot be repeated into logs or speech.
 - Report the real automatic-stop reason in fallback debriefs and fix agenda updates in the sidecar.
+- Replace full-page Meet presence snapshots with bounded signal-only scans and prevent overlapping monitor polls on long calls.
 
 ## 0.1.5 — 2026-08-21
 

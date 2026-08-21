@@ -1,6 +1,6 @@
 # Agent Meet Bridge architecture
 
-Agent Meet Bridge treats the meeting, transcript, participation policy, agent harness, speech output, persistence, and private UI as separate adapters. Codex, Claude Code, Hermes, Pi, and a generic CLI bridge implement one harness contract; local speech, OpenAI Realtime, Grok Voice, and task-scoped Codex Realtime implement one voice boundary.
+Agent Meet Bridge treats the meeting, transcript, participation policy, agent harness, speech output, persistence, and private UI as separate adapters. Codex, Claude Code, Cursor, Hermes, Pi, and a generic CLI bridge implement one harness contract; local speech, OpenAI Realtime, Grok Voice, and task-scoped Codex Realtime implement one voice boundary.
 
 ## Runtime topology
 
@@ -29,7 +29,7 @@ Google Meet
 | Meeting transport | Playwright + Chrome | Join, expose caption text, inject agent audio, force camera off, leave cleanly |
 | Transcript input | Meet live captions | Produce finalized utterances without retaining large DOM subtrees |
 | Participation policy | Client-side wake-name gate | Release addressed turns and bounded follow-ups; suppress ambient output |
-| Agent harness | Codex / Claude Code / Hermes / Pi | Start/resume durable context, answer, interrupt, enforce permissions, close |
+| Agent harness | Codex / Claude Code / Cursor / Hermes / Pi | Start/resume durable context, answer, interrupt, enforce permissions, close |
 | Speech output | Local / OpenAI / Grok / Codex | Stream mono PCM and feed the synthetic Meet microphone |
 | Transcript store | Local Markdown + JSONL | Preserve call and private records with timestamps and visibility |
 | Sidecar | Token-authenticated loopback HTTP | Show call/private timeline; keep prompts silent; require confirmation to speak; clear token-bearing URL fragments |
@@ -40,6 +40,7 @@ The harness boundary receives a self-contained prompt containing the question, r
 
 - Codex owns one app-server process and one durable task.
 - Claude Code uses JSON output plus an explicit UUID session and resumes it on subsequent turns.
+- Cursor uses JSON print mode, Ask mode for read turns, durable session resume, and Agent+force only for authorized private prototype turns.
 - Hermes uses one-shot sessions; each resume produces a successor ID, which the adapter resolves and carries forward.
 - Pi uses JSON event mode, explicit session IDs, and a built-in tool allowlist.
 - Generic CLI launches an explicit executable with an argument array (never a shell string) and can normalize text or JSON results.
@@ -58,7 +59,7 @@ Room transcript and private messages may appear in one operator timeline, but th
 
 ## Permission invariant
 
-Spoken turns remain read-only. Even when `--allow-writes` is enabled, only a private request explicitly marked `Prototype` can receive workspace-write permission. Codex uses a read-only sandbox; Claude Code and Pi receive constrained read-tool sets; Hermes read-only turns use safe mode because its one-shot mode bypasses approvals. The generic adapter cannot enforce the supplied executable's internal sandbox and reports that limitation explicitly.
+Spoken turns remain read-only. Even when `--allow-writes` is enabled, only a private request explicitly marked `Prototype` can receive workspace-write permission. Codex uses a read-only sandbox; Claude Code and Pi receive constrained read-tool sets; Cursor uses Ask mode; Hermes read-only turns use safe mode because its one-shot mode bypasses approvals. The generic adapter cannot enforce the supplied executable's internal sandbox and reports that limitation explicitly.
 
 ## Persistence
 
@@ -76,7 +77,7 @@ All session data and the dedicated browser profile live under ignored `data/` pa
 
 1. Speaker labeling and diarization for the raw-audio transcript adapter.
 2. Offline streaming transcription without Meet captions.
-3. Additional durable harness adapters for Cursor and agent SDKs as their permission contracts mature.
+3. Additional durable harness adapters for agent SDKs as their permission contracts mature.
 4. Cross-platform TTS and audio-device support.
 5. Hosted browser workers and calendar-driven launch.
 6. Operator approval cards for write requests raised from the room.

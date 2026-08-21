@@ -101,7 +101,7 @@ Start options:
   --instructions <text>           Optional persona or role guidance supplied by the operator
   --mode passive|active|unrestricted
   --runtime local|codex|openai|grok  Voice provider; local is the default
-  --harness codex|claude|hermes|pi|generic  Engineering-agent harness
+  --harness codex|claude|cursor|hermes|pi|generic  Engineering-agent harness
   --harness-context <id>          Resume a durable task/session in that harness
   --harness-model <model>         Optional harness-specific model override
   --harness-provider <provider>   Optional Hermes inference provider override
@@ -558,7 +558,7 @@ async function startMeeting() {
   const workHarness = createHarness({
     provider: harnessProvider,
     threadId: harnessProvider === "codex" ? harnessContext : undefined,
-    sessionId: ["claude", "hermes", "pi"].includes(harnessProvider) ? harnessContext : undefined,
+    sessionId: ["claude", "cursor", "hermes", "pi"].includes(harnessProvider) ? harnessContext : undefined,
     contextId: harnessProvider === "generic" ? harnessContext : undefined,
     workspace: harnessWorkspace,
     allowWrites: values["allow-writes"],
