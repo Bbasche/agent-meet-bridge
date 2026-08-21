@@ -47,6 +47,8 @@ flowchart LR
 
 The public/private boundary is enforced in the client, not only in the prompt. Private answers never reach meeting audio unless the operator explicitly opens **Share with room** and confirms **Speak in meeting**.
 
+Detailed codebase/tool output generated for a room question is also private: it appears in the sidecar and private audit trail, while the room transcript records only the concise answer that was actually spoken.
+
 ## Requirements
 
 - macOS 14 or later

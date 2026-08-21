@@ -107,6 +107,20 @@ export class SidecarServer {
     this.server = null;
   }
 
+  appendPrivateMessage({ role = "assistant", text, timestamp = new Date().toISOString() }) {
+    const clean = String(text ?? "").trim();
+    if (!clean) return false;
+    this.privateMessages.push({
+      role: role === "user" ? "user" : "assistant",
+      text: clean.length > 40_000 ? `${clean.slice(0, 40_000)}\n\n[Output truncated]` : clean,
+      timestamp,
+    });
+    if (this.privateMessages.length > 200) {
+      this.privateMessages.splice(0, this.privateMessages.length - 200);
+    }
+    return true;
+  }
+
   async #handle(request, response) {
     const url = new URL(request.url, "http://127.0.0.1");
     response.setHeader(
@@ -140,17 +154,13 @@ export class SidecarServer {
           return;
         }
         const desiredAction = body.desired_action === "prototype" ? "prototype" : "analyze";
-        this.privateMessages.push({ role: "user", text: message, timestamp: new Date().toISOString() });
+        this.appendPrivateMessage({ role: "user", text: message });
         const result = await this.onPrivateMessage({ message, desiredAction });
         if (result?.message) {
-          this.privateMessages.push({
+          this.appendPrivateMessage({
             role: "assistant",
             text: result.message,
-            timestamp: new Date().toISOString(),
           });
-        }
-        if (this.privateMessages.length > 200) {
-          this.privateMessages.splice(0, this.privateMessages.length - 200);
         }
         sendJson(response, 200, result);
         return;

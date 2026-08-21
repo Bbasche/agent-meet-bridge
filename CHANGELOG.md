@@ -23,6 +23,8 @@ All notable changes to this project are documented here.
 - Keep unparsed failed harness stdout and stderr out of surfaced errors so private meeting or repository content cannot be repeated into logs or speech.
 - Report the real automatic-stop reason in fallback debriefs and fix agenda updates in the sidecar.
 - Replace full-page Meet presence snapshots with bounded signal-only scans and prevent overlapping monitor polls on long calls.
+- Route detailed room-triggered harness output to the silent private stream; keep only actually spoken summaries in the room transcript.
+- Bound harness results before provider/UI handoff and explicitly prohibit secret or private-sidecar disclosure into the meeting.
 
 ## 0.1.5 — 2026-08-21
 

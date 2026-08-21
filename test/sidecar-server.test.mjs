@@ -60,6 +60,13 @@ test("private sidecar requires its per-call session token", async (context) => {
   );
   assert.ok(historyBody.messages.every(({ timestamp }) => !Number.isNaN(Date.parse(timestamp))));
 
+  assert.equal(server.appendPrivateMessage({
+    role: "assistant",
+    text: "Detailed room-request analysis",
+  }), true);
+  const historyWithRoomAnalysis = await fetch(`${origin}/api/private/messages`, { headers });
+  assert.equal((await historyWithRoomAnalysis.json()).messages.at(-1).text, "Detailed room-request analysis");
+
   const speak = await fetch(`${origin}/api/speak`, {
     method: "POST",
     headers,

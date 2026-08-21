@@ -57,6 +57,8 @@ Realtime providers use a decoded remote-track path. An init script intercepts ea
 
 Room transcript and private messages may appear in one operator timeline, but they remain different data classes. A private answer cannot reach audio automatically. Only the explicit `Share with room` → `Speak in meeting` path calls the speech adapter.
 
+Room-triggered harness analysis is a private data class too. The provider may use a bounded result to form a concise spoken answer, but the detailed tool result is stored only in the private audit stream. The room transcript contains the provider's final spoken transcript, never hidden tool output.
+
 ## Permission invariant
 
 Spoken turns remain read-only. Even when `--allow-writes` is enabled, only a private request explicitly marked `Prototype` can receive workspace-write permission. Codex uses a read-only sandbox; Claude Code and Pi receive constrained read-tool sets; Cursor uses Ask mode; Hermes read-only turns use safe mode because its one-shot mode bypasses approvals. The generic adapter cannot enforce the supplied executable's internal sandbox and reports that limitation explicitly.

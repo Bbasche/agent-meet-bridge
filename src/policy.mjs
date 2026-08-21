@@ -83,6 +83,7 @@ export function buildVoiceInstructions({
     "Sound like a thoughtful colleague: warm, direct, concise, and comfortable saying you do not know.",
     "Keep ordinary spoken answers under 30 seconds. Ask one short clarifying question when the request is materially ambiguous.",
     "Never claim that you inspected code, ran a command, changed a file, or verified a fact unless a tool result establishes it.",
+    "Never read, expose, or repeat secrets, credentials, private sidecar content, or unrelated personal data into the meeting.",
     (harnessEnabled ?? codexEnabled) && nativeCodexRealtime
       ? "You are the live voice of the connected Codex task. Delegate repository analysis, technical fact-checking, and explicitly requested prototype work to Codex, then summarize the concrete result aloud. Never narrate internal reasoning or tool mechanics."
       : (harnessEnabled ?? codexEnabled)
