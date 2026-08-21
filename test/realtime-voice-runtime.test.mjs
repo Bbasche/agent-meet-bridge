@@ -20,7 +20,11 @@ class FakeSocket extends EventEmitter {
   }
 
   send(message) {
-    this.sent.push(JSON.parse(message));
+    const event = JSON.parse(message);
+    this.sent.push(event);
+    if (event.type === "session.update") {
+      queueMicrotask(() => this.event({ type: "session.updated", session: { id: "test-session" } }));
+    }
   }
 
   close(code, reason) {
@@ -60,6 +64,21 @@ test("OpenAI realtime configures audio, tools, and 48k-to-24k conversion", async
   runtime.appendAudio(Buffer.alloc(9_600));
   const appended = socket.sent.at(-1);
   assert.equal(Buffer.from(appended.audio, "base64").length, 4_800);
+  await runtime.close();
+});
+
+test("realtime connect rejects a provider session error before readiness", async () => {
+  class RejectingSocket extends FakeSocket {
+    send(message) {
+      const event = JSON.parse(message);
+      this.sent.push(event);
+      if (event.type === "session.update") {
+        queueMicrotask(() => this.event({ type: "error", error: { message: "invalid voice" } }));
+      }
+    }
+  }
+  const runtime = makeRuntime({ WebSocketImpl: RejectingSocket, onError: () => {} });
+  await assert.rejects(runtime.connect(), /invalid voice/);
   await runtime.close();
 });
 

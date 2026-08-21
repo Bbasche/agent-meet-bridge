@@ -142,6 +142,7 @@ export class RealtimeVoiceRuntime {
     reconnect = true,
     reconnectMaxDelayMs = 30_000,
     maxBufferedAudioBytes,
+    startupTimeoutMs = 15_000,
   }) {
     const config = typeof provider === "string" ? REALTIME_PROVIDERS[provider] : provider;
     if (!config) throw new Error(`Unsupported realtime provider: ${provider}`);
@@ -166,6 +167,7 @@ export class RealtimeVoiceRuntime {
     this.reconnect = reconnect;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
     this.maxBufferedAudioBytes = maxBufferedAudioBytes ?? config.inputRate * 2 * 2;
+    this.startupTimeoutMs = startupTimeoutMs;
     this.socket = null;
     this.connectPromise = null;
     this.closing = false;
@@ -180,6 +182,7 @@ export class RealtimeVoiceRuntime {
     this.transcriptionTimers = new Map();
     this.latestTranscriptions = new Map();
     this.conversationId = null;
+    this.startup = null;
   }
 
   get connected() {
@@ -236,6 +239,8 @@ export class RealtimeVoiceRuntime {
     for (const timer of this.transcriptionTimers.values()) clearTimeout(timer);
     this.transcriptionTimers.clear();
     clearTimeout(this.currentResponse?.cleanupTimer);
+    this.startup?.reject(new Error(`${this.provider.id} realtime closed before session readiness`));
+    this.startup = null;
     const socket = this.socket;
     this.socket = null;
     if (socket && socket.readyState < 2) socket.close(1000, "meeting ended");
@@ -275,24 +280,41 @@ export class RealtimeVoiceRuntime {
       socket.once("open", resolve);
       socket.once("error", reject);
     });
-    this.#send({
-      type: "session.update",
-      session: this.provider.session({
-        model: this.model,
-        voice: this.voice,
-        instructions: this.instructions,
-        tools: this.harnessEnabled ? [createAskAgentTool()] : [],
-        reasoningEffort: this.reasoningEffort,
-      }),
+    const ready = new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`${this.provider.id} realtime session was not acknowledged`)),
+        this.startupTimeoutMs,
+      );
+      timeout.unref?.();
+      this.startup = {
+        resolve: () => { clearTimeout(timeout); resolve(); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      };
     });
-    this.reconnectAttempts = 0;
-    this.#flushAudio();
-    await this.onStatus?.({ state: "connected", provider: this.provider.id });
+    try {
+      this.#send({
+        type: "session.update",
+        session: this.provider.session({
+          model: this.model,
+          voice: this.voice,
+          instructions: this.instructions,
+          tools: this.harnessEnabled ? [createAskAgentTool()] : [],
+          reasoningEffort: this.reasoningEffort,
+        }),
+      });
+      await ready;
+      this.reconnectAttempts = 0;
+      this.#flushAudio();
+      await this.onStatus?.({ state: "connected", provider: this.provider.id });
+    } finally {
+      this.startup = null;
+    }
   }
 
   #handleClose(socket, code, reason) {
     if (this.socket !== socket) return;
     this.socket = null;
+    this.startup?.reject(new Error(`${this.provider.id} realtime disconnected before session readiness`));
     if (this.closing) return;
     this.onStatus?.({ state: "reconnecting", provider: this.provider.id });
     this.logger.warn?.(`[${this.provider.id}] disconnected (${code}) ${reason.toString()}`);
@@ -337,10 +359,13 @@ export class RealtimeVoiceRuntime {
 
   async #handleEvent(event) {
     if (event.type === "error") {
-      throw new Error(event.error?.message ?? JSON.stringify(event));
+      const error = new Error(event.error?.message ?? JSON.stringify(event));
+      this.startup?.reject(error);
+      throw error;
     }
     if (event.type === "session.created" || event.type === "session.updated") {
       this.conversationId = event.session?.conversation_id ?? event.session?.id ?? this.conversationId;
+      if (event.type === "session.updated") this.startup?.resolve();
       return;
     }
     if (event.type === "input_audio_buffer.speech_started") {
