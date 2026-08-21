@@ -23,7 +23,7 @@ import {
 } from "./policy.mjs";
 import { SidecarServer } from "./sidecar-server.mjs";
 import { TranscriptStore } from "./transcript-store.mjs";
-import { buildMeetingContext } from "./meeting-context.mjs";
+import { buildMeetingContext, MeetingContextAccumulator } from "./meeting-context.mjs";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -492,8 +492,9 @@ function buildHarnessPrompt({
   agentName,
   agendaText = "",
   visibility = "meeting",
+  contextSnapshot,
 }) {
-  const recentContext = buildMeetingContext(transcript);
+  const recentContext = contextSnapshot ?? buildMeetingContext(transcript);
   return [
     `You are connected to a live meeting through ${agentName}.`,
     visibility === "private"
@@ -592,6 +593,12 @@ async function startMeeting() {
     values["profile-dir"] ?? process.env.MEETING_AGENT_PROFILE_DIR ?? path.join(PACKAGE_ROOT, "data/browser-profile"),
   );
   const transcript = [];
+  const privateTranscript = [];
+  const meetingContext = new MeetingContextAccumulator();
+  const rememberPrivate = (entry) => {
+    privateTranscript.push(entry);
+    if (privateTranscript.length > 200) privateTranscript.splice(0, privateTranscript.length - 200);
+  };
   const keepAwake = process.platform === "darwin"
     ? spawn("caffeinate", ["-dimsu"], { stdio: "ignore" })
     : null;
@@ -623,11 +630,37 @@ async function startMeeting() {
   let transport;
   let sidecar;
   let stopping = false;
+  let contextSnapshotTimer = null;
+  let contextSnapshotQueue = Promise.resolve();
+  const flushContextSnapshot = async () => {
+    clearTimeout(contextSnapshotTimer);
+    contextSnapshotTimer = null;
+    const snapshot = [
+      `# ${agentName} live meeting context`,
+      "",
+      meetingContext.snapshot({ maxChars: 30_000, maxTurns: 120 }),
+    ].join("\n");
+    contextSnapshotQueue = contextSnapshotQueue
+      .catch(() => {})
+      .then(() => transcriptStore.writeContext(snapshot));
+    await contextSnapshotQueue;
+  };
+  const scheduleContextSnapshot = () => {
+    clearTimeout(contextSnapshotTimer);
+    contextSnapshotTimer = setTimeout(() => {
+      contextSnapshotTimer = null;
+      flushContextSnapshot().catch((error) => console.error(`Context snapshot failed: ${error.message}`));
+    }, 2_000);
+    contextSnapshotTimer.unref?.();
+  };
   const createDebrief = async () => {
-    const recentContext = transcript
-      .slice(-200)
+    await flushContextSnapshot();
+    const recentContext = meetingContext.snapshot({ maxChars: 40_000, maxTurns: 200 });
+    const privateContext = privateTranscript
+      .slice(-50)
       .map((entry) => `${entry.speaker}: ${entry.text}`)
-      .join("\n");
+      .join("\n")
+      .slice(-8_000);
     const fallback = [
       "# Meeting debrief",
       "",
@@ -645,7 +678,10 @@ async function startMeeting() {
             "Include: outcome, decisions, unresolved questions, action items with owners when known, and the most useful next step.",
             "Do not invent facts. Do not edit workspace files.",
             agendaText ? `Agenda:\n${agendaText}` : "No written agenda was provided.",
-            recentContext ? `Meeting transcript:\n${recentContext}` : "No transcript entries were captured.",
+            transcript.length ? `Structured meeting context:\n${recentContext}` : "No transcript entries were captured.",
+            privateContext
+              ? `Private operator context (use only in this private debrief; it was not said to the room):\n${privateContext}`
+              : "No private operator context was captured.",
           ].join("\n\n"),
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Debrief timed out")), 120_000)),
@@ -673,7 +709,9 @@ async function startMeeting() {
       console.error(error.message);
     }
     await voiceRuntime?.close().catch(() => {});
+    await flushContextSnapshot().catch((error) => console.error(error.message));
     if (debrief) await createDebrief().catch((error) => console.error(error.message));
+    await transcriptStore.flush().catch((error) => console.error(error.message));
     await workHarness.close();
     keepAwake?.kill("SIGTERM");
     await sidecar?.close();
@@ -697,7 +735,9 @@ async function startMeeting() {
       const complete = { ...entry, timestamp: new Date().toISOString() };
       transcript.push(complete);
       if (transcript.length > 500) transcript.splice(0, transcript.length - 500);
+      meetingContext.add(complete);
       await transcriptStore.append(complete);
+      scheduleContextSnapshot();
       console.log(`${complete.speaker}: ${complete.text}`);
     },
     onStatus: ({ state }) => { voiceStatus = state; },
@@ -712,6 +752,7 @@ async function startMeeting() {
         allowWrites: false,
         agentName,
         agendaText,
+        contextSnapshot: meetingContext.snapshot(),
       }),
     });
     await transcriptStore.append({
@@ -753,6 +794,7 @@ async function startMeeting() {
                   allowWrites: false,
                   agentName,
                   agendaText,
+                  contextSnapshot: meetingContext.snapshot(),
                 }),
                 turnMode === "passive"
                   ? "The speaker addressed you or is in an authorized follow-up. Reply aloud in at most 80 words."
@@ -825,6 +867,7 @@ async function startMeeting() {
         desiredAction,
       });
       await transcriptStore.appendPrivate({ speaker: "Operator", text: message, kind: "private-user" });
+      rememberPrivate({ speaker: "Operator", text: message });
       const result = await workHarness.ask({
         allowWrites: allowTurnWrites,
         prompt: buildHarnessPrompt({
@@ -835,6 +878,7 @@ async function startMeeting() {
           agentName,
           agendaText,
           visibility: "private",
+          contextSnapshot: meetingContext.snapshot(),
         }),
       });
       await transcriptStore.appendPrivate({
@@ -842,6 +886,7 @@ async function startMeeting() {
         text: result.text,
         kind: "private-assistant",
       });
+      rememberPrivate({ speaker: agentName, text: result.text });
       return { message: result.text, contextId: result.contextId, visibility: "private" };
     },
     onStop: async () => workHarness.interrupt(),
@@ -852,6 +897,7 @@ async function startMeeting() {
         text: `Updated meeting agenda:\n${text}`,
         kind: "private-agenda",
       });
+      rememberPrivate({ speaker: "Operator", text: `Updated meeting agenda:\n${text}` });
       return { agenda: agendaText };
     },
     onSpeak: async ({ text }) => {
@@ -860,6 +906,7 @@ async function startMeeting() {
         text: `Shared with room: ${text}`,
         kind: "private-share",
       });
+      rememberPrivate({ speaker: "Operator", text: `Shared with room: ${text}` });
       await voiceRuntime.speak(text);
     },
   });

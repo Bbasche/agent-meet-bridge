@@ -11,6 +11,8 @@ All notable changes to this project are documented here.
 - Capture decoded remote WebRTC audio through an AudioWorklet and recover the isolated meeting browser after crashes without losing the durable agent context.
 - Add bounded meeting/repository context packs and harden passive wake-name gating against provider event reordering.
 - Add a real loopback WebSocket integration check covering session readiness, PCM conversion, wake gating, harness tools, and spoken output.
+- Persist a bounded live `context.md` and include structured room plus private-operator context in the private debrief.
+- Retain high-signal context across long calls and serialize transcript writes before shutdown.
 
 ## 0.1.5 — 2026-08-21
 

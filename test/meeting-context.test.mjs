@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMeetingContext } from "../src/meeting-context.mjs";
+import { buildMeetingContext, MeetingContextAccumulator } from "../src/meeting-context.mjs";
 
 test("meeting context keeps speakers, chronology, questions, and commitments", () => {
   const context = buildMeetingContext([
@@ -21,4 +21,16 @@ test("meeting context applies a bounded recent-turn budget", () => {
   const context = buildMeetingContext(entries, { maxChars: 240, maxTurns: 80 });
   assert.match(context, /Turn 99/);
   assert.doesNotMatch(context, /Turn 0\b/);
+});
+
+test("long-call context retains early high-signal items beyond the UI window", () => {
+  const context = new MeetingContextAccumulator([], { recentLimit: 20 });
+  context.add({ speaker: "Maya", text: "We decided to use signed webhooks." });
+  for (let index = 0; index < 100; index += 1) {
+    context.add({ speaker: "Lee", text: `Routine discussion turn ${index}.` });
+  }
+  const snapshot = context.snapshot({ maxChars: 2_000, maxTurns: 10 });
+  assert.match(snapshot, /Maya: We decided to use signed webhooks/);
+  assert.match(snapshot, /Turns captured: 101/);
+  assert.doesNotMatch(snapshot, /Routine discussion turn 0\b/);
 });

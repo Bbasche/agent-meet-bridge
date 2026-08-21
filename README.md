@@ -23,7 +23,7 @@ Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness
 | Agent harness | Durable Codex, Claude Code, Hermes, or Pi sessions |
 | Spoken replies | Local macOS speech, OpenAI Realtime, Grok Voice, or experimental Codex Realtime |
 | Private backchannel | Token-authenticated `127.0.0.1` sidebar; private by default |
-| Call record | Timestamped room transcript plus a separate private audit trail |
+| Call record | Timestamped room transcript, private audit trail, live context snapshot, and final debrief |
 | Camera safety | Physical camera acquisition is blocked; the Meet camera control is verified off |
 | Code access | Read-only by default; writes require launch-time permission and a private `Prototype` turn |
 

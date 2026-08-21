@@ -67,6 +67,7 @@ Each launch creates a session directory containing:
 - `session.json` — non-secret runtime metadata;
 - `transcript.jsonl` and `transcript.md` — room-visible conversation;
 - `private.jsonl` and `private.md` — private operator exchange;
+- `context.md` — a bounded live snapshot of participants, questions, candidate commitments, and recent chronology;
 - generated speech files when the local speech adapter is used.
 
 All session data and the dedicated browser profile live under ignored `data/` paths.
