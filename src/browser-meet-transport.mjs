@@ -2,6 +2,8 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 const AUDIO_SAMPLE_RATE = 48_000;
+const CAPTION_SETTLE_MS = 1_600;
+const CAPTION_SENT_DEDUPE_WINDOW_MS = 8_000;
 const MEET_BROWSER_ARGS = Object.freeze([
   "--use-fake-ui-for-media-stream",
   "--autoplay-policy=no-user-gesture-required",
@@ -9,6 +11,128 @@ const MEET_BROWSER_ARGS = Object.freeze([
   "--disable-session-crashed-bubble",
   "--hide-crash-restore-bubble",
 ]);
+
+function mergeIncrementalCaption(whole, previousFragment, nextFragment) {
+  const normalize = (value) => value?.replace(/\s+/g, " ").trim() ?? "";
+  const fold = (value) => normalize(value)
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  const replaceTrailingFragment = () => {
+    const normalizedWhole = normalize(whole);
+    const normalizedPrevious = normalize(previousFragment);
+    if (normalizedWhole.endsWith(normalizedPrevious)) {
+      return normalize(`${normalizedWhole.slice(0, -normalizedPrevious.length)} ${nextFragment}`);
+    }
+    return normalize(nextFragment);
+  };
+  const commonPrefixWords = (left, right) => {
+    const leftWords = fold(left).split(" ").filter(Boolean);
+    const rightWords = fold(right).split(" ").filter(Boolean);
+    const limit = Math.min(leftWords.length, rightWords.length);
+    let count = 0;
+    while (count < limit && leftWords[count] === rightWords[count]) count += 1;
+    return { count, shorter: limit };
+  };
+
+  whole = normalize(whole);
+  previousFragment = normalize(previousFragment);
+  nextFragment = normalize(nextFragment);
+  if (!whole || !previousFragment) return nextFragment;
+  if (!nextFragment) return whole;
+
+  const previousFolded = fold(previousFragment);
+  const nextFolded = fold(nextFragment);
+  if (nextFolded === previousFolded || nextFolded.startsWith(`${previousFolded} `)) {
+    return replaceTrailingFragment();
+  }
+  if (previousFolded.startsWith(`${nextFolded} `)) return whole;
+
+  const fragmentPrefix = commonPrefixWords(previousFragment, nextFragment);
+  if (fragmentPrefix.count >= 5 && fragmentPrefix.count / fragmentPrefix.shorter >= 0.6) {
+    return replaceTrailingFragment();
+  }
+
+  const wholePrefix = commonPrefixWords(whole, nextFragment);
+  if (wholePrefix.count >= 5 && wholePrefix.count / wholePrefix.shorter >= 0.6) {
+    return nextFragment;
+  }
+
+  const lastWholeWord = whole.match(/([\p{L}\p{N}]+)[^\p{L}\p{N}]*$/u)?.[1] ?? "";
+  const firstNextWord = nextFragment.match(/^[^\p{L}\p{N}]*([\p{L}\p{N}]+)/u)?.[1] ?? "";
+  const lastFolded = fold(lastWholeWord);
+  const firstFolded = fold(firstNextWord);
+  if (
+    Math.min(lastFolded.length, firstFolded.length) >= 3 &&
+    (lastFolded.startsWith(firstFolded) || firstFolded.startsWith(lastFolded))
+  ) {
+    return normalize(`${whole.replace(/([\p{L}\p{N}]+)[^\p{L}\p{N}]*$/u, "")} ${nextFragment}`);
+  }
+
+  let overlap = Math.min(whole.length, nextFragment.length);
+  while (
+    overlap > 0 &&
+    whole.slice(-overlap).toLocaleLowerCase() !== nextFragment.slice(0, overlap).toLocaleLowerCase()
+  ) overlap -= 1;
+  return normalize(`${whole} ${nextFragment.slice(overlap)}`);
+}
+
+function captionMatchesExpectedSpeech(caption, expectedSpeech) {
+  const words = (value) => String(value ?? "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const captionWords = words(caption);
+  const expectedWords = words(expectedSpeech);
+  if (captionWords.length < 4 || expectedWords.length < 4) return false;
+
+  const captionLine = captionWords.join(" ");
+  const expectedLine = expectedWords.join(" ");
+  if (captionLine.includes(expectedLine) || expectedLine.includes(captionLine)) return true;
+
+  let longestRun = 0;
+  for (let captionIndex = 0; captionIndex < captionWords.length; captionIndex += 1) {
+    for (let expectedIndex = 0; expectedIndex < expectedWords.length; expectedIndex += 1) {
+      let run = 0;
+      while (
+        captionIndex + run < captionWords.length &&
+        expectedIndex + run < expectedWords.length &&
+        captionWords[captionIndex + run] === expectedWords[expectedIndex + run]
+      ) run += 1;
+      longestRun = Math.max(longestRun, run);
+    }
+  }
+  return longestRun >= 5;
+}
+
+function isKnownMeetChromeCaption(speaker, text) {
+  const normalize = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  return (
+    /^radio_button_checked$/i.test(normalize(speaker)) &&
+    /^This meeting is being recorded\.?$/i.test(normalize(text))
+  );
+}
+
+function captionCandidateOnSpeakerChange(pendingCandidate, nextSpeaker) {
+  if (!pendingCandidate) return null;
+  const pendingSpeaker = String(pendingCandidate.speaker ?? "").trim();
+  const normalizedNextSpeaker = String(nextSpeaker ?? "").trim();
+  if (!pendingSpeaker || !normalizedNextSpeaker || pendingSpeaker === normalizedNextSpeaker) return null;
+  return pendingCandidate;
+}
+
+function captionKeyWasRecentlySent(key, lastSentKey, lastSentAt, now, windowMs = 8_000) {
+  return Boolean(
+    key &&
+    key === lastSentKey &&
+    Number.isFinite(lastSentAt) &&
+    Number.isFinite(now) &&
+    now >= lastSentAt &&
+    now - lastSentAt <= windowMs
+  );
+}
 
 // This script runs before Google Meet's application code. It gives Meet a Web
 // Audio-backed microphone and taps remote WebRTC audio into 100 ms PCM frames.
@@ -185,25 +309,24 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
 
   window.__meetingAgentStartCaptions = () => {
     let lastSent = "";
+    let lastSentAt = 0;
     let lastCandidate = null;
     let wakeBuffer = null;
     let lastHumanSpeaker = "Meeting";
     let timer;
-    const ignoredCaptionText = /^(?:(?:\d{1,2}:\d{2})(?:\s*[AP]M)?|Captions?|Meeting details|Share screen|Leave call|Turn (?:on|off)|More options|Chat with everyone|Meeting tools|Host controls|People|External participants joined|Jump to bottom|arrow_downward)$/i;
+    const ignoredCaptionText = /^(?:(?:\d{1,2}:\d{2})(?:\s*[AP]M)?|[AP]M|Captions?|Meeting details|Share screen|Leave call|Turn (?:on|off)|More options|Chat(?: with everyone)?|Meeting tools|Host controls|People|External participants joined|Jump to bottom|arrow_downward|Loading(?:\.\.\.)?|Reframe|Backgrounds and effects|Others might still see your full video\.?|Got it|Summarize captions|summarize_auto_\d+|Close)$/i;
     const normalize = (value) => value?.replace(/\s+/g, " ").trim() ?? "";
-    const mergeIncremental = (whole, previousFragment, nextFragment) => {
-      if (!whole || !previousFragment) return nextFragment;
-      if (nextFragment.startsWith(previousFragment)) {
-        return whole.slice(0, Math.max(0, whole.length - previousFragment.length)) + nextFragment;
-      }
-      if (previousFragment.startsWith(nextFragment) || whole.endsWith(nextFragment)) return whole;
-      let overlap = Math.min(whole.length, nextFragment.length);
-      while (overlap > 0 && whole.slice(-overlap) !== nextFragment.slice(0, overlap)) overlap -= 1;
-      return normalize(whole + " " + nextFragment.slice(overlap));
-    };
+    const mergeIncremental = ${mergeIncrementalCaption.toString()};
+    const matchesExpectedSpeech = ${captionMatchesExpectedSpeech.toString()};
+    const matchesMeetChromeCaption = ${isKnownMeetChromeCaption.toString()};
+    const candidateOnSpeakerChange = ${captionCandidateOnSpeakerChange.toString()};
+    const keyWasRecentlySent = ${captionKeyWasRecentlySent.toString()};
+    window.__meetingAgentExpectedSpeech = window.__meetingAgentExpectedSpeech ?? [];
     const emitCandidate = (candidate) => {
-      if (!candidate || candidate.key === lastSent) return;
+      const emittedAt = Date.now();
+      if (!candidate || keyWasRecentlySent(candidate.key, lastSent, lastSentAt, emittedAt, ${CAPTION_SENT_DEDUPE_WINDOW_MS})) return;
       lastSent = candidate.key;
+      lastSentAt = emittedAt;
       window.__meetingAgentCaptionIn?.({ speaker: candidate.speaker, text: candidate.text });
     };
     const inferSpeaker = (node, text) => {
@@ -231,18 +354,27 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
       const isAgentCaption =
         /^you$/i.test(normalizedSpeaker) ||
         (agentName && new RegExp("^" + escapedAgentName + "(?:\\s+Bot)?$", "i").test(normalizedSpeaker));
+      const now = Date.now();
+      window.__meetingAgentExpectedSpeech = window.__meetingAgentExpectedSpeech
+        .filter((entry) => entry.expiresAt > now);
+      const matchesAgentSpeech = window.__meetingAgentExpectedSpeech
+        .some((entry) => matchesExpectedSpeech(text, entry.text));
       if (
         !text ||
         text.length > 400 ||
         isAgentCaption ||
+        matchesAgentSpeech ||
+        matchesMeetChromeCaption(speaker, text) ||
         ignoredCaptionText.test(text) ||
         /more_vert|visual_effects|frame_person|devices/i.test(text)
       ) return;
       if (speaker !== "Meeting") lastHumanSpeaker = speaker;
       const effectiveSpeaker = speaker === "Meeting" ? lastHumanSpeaker : speaker;
-      if (wakeBuffer && effectiveSpeaker !== wakeBuffer.speaker) {
+      const previousSpeakerCandidate = candidateOnSpeakerChange(lastCandidate, effectiveSpeaker);
+      if (previousSpeakerCandidate) {
         clearTimeout(timer);
-        emitCandidate(lastCandidate);
+        emitCandidate(previousSpeakerCandidate);
+        lastCandidate = null;
         wakeBuffer = null;
       }
       if (addressesAgent) {
@@ -259,7 +391,7 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
       const candidateSpeaker = wakeBuffer?.speaker ?? effectiveSpeaker;
       const candidateText = wakeBuffer?.text ?? text;
       const key = candidateSpeaker + "\u0000" + candidateText;
-      if (key === lastSent) return;
+      if (keyWasRecentlySent(key, lastSent, lastSentAt, now, ${CAPTION_SENT_DEDUPE_WINDOW_MS})) return;
       if (key !== (lastCandidate?.key ?? "")) {
         lastCandidate = { key, speaker: candidateSpeaker, text: candidateText };
         console.info("[meeting-agent] caption candidate: " + candidateSpeaker + ": " + candidateText.slice(-240));
@@ -268,11 +400,11 @@ const AUDIO_BRIDGE_SCRIPT = String.raw`
       timer = setTimeout(() => {
         if (
           !lastCandidate ||
-          lastCandidate.key === lastSent
+          keyWasRecentlySent(lastCandidate.key, lastSent, lastSentAt, Date.now(), ${CAPTION_SENT_DEDUPE_WINDOW_MS})
         ) return;
         emitCandidate(lastCandidate);
         wakeBuffer = null;
-      }, 700);
+      }, ${CAPTION_SETTLE_MS});
     };
     window.__meetingAgentCaptionObserver?.disconnect();
     window.__meetingAgentCaptionObserver = new MutationObserver((mutations) => {
@@ -743,6 +875,19 @@ export class BrowserMeetTransport {
     );
   }
 
+  async expectAgentSpeech(text, ttlMs = 30_000) {
+    if (!this.page || this.page.isClosed()) return;
+    const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+    if (!clean) return;
+    await this.page.evaluate(({ text, expiresAt }) => {
+      window.__meetingAgentExpectedSpeech = window.__meetingAgentExpectedSpeech ?? [];
+      window.__meetingAgentExpectedSpeech.push({ text, expiresAt });
+      if (window.__meetingAgentExpectedSpeech.length > 12) {
+        window.__meetingAgentExpectedSpeech.splice(0, window.__meetingAgentExpectedSpeech.length - 12);
+      }
+    }, { text: clean, expiresAt: Date.now() + ttlMs });
+  }
+
   async clearPlayback() {
     if (!this.page || this.page.isClosed()) return;
     await this.page.evaluate(() => window.__meetingAgentClearPlayback());
@@ -806,4 +951,15 @@ export async function inspectBotProfile({ profileDir, browserChannel = "chrome" 
   }
 }
 
-export { AUDIO_BRIDGE_SCRIPT, AUDIO_SAMPLE_RATE, MEET_BROWSER_ARGS };
+export {
+  AUDIO_BRIDGE_SCRIPT,
+  AUDIO_SAMPLE_RATE,
+  CAPTION_SETTLE_MS,
+  CAPTION_SENT_DEDUPE_WINDOW_MS,
+  MEET_BROWSER_ARGS,
+  captionCandidateOnSpeakerChange,
+  captionKeyWasRecentlySent,
+  captionMatchesExpectedSpeech,
+  isKnownMeetChromeCaption,
+  mergeIncrementalCaption,
+};

@@ -161,6 +161,13 @@ textarea:focus-visible,
 .presence-line { margin-top: 3px; display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; }
 .presence-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .presence-dot[data-state="offline"] { background: var(--text-secondary); box-shadow: none; }
+.notes-line { margin-top: 2px; display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; }
+.notes-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 999px; background: var(--text-secondary); }
+.notes-line[data-state="ready"] .notes-dot { background: var(--accent); }
+.notes-line[data-state="syncing"] .notes-dot,
+.notes-line[data-state="starting"] .notes-dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.notes-line[data-state="error"] { color: var(--error-text); }
+.notes-line[data-state="error"] .notes-dot { background: var(--error-text); }
 
 .private-badge {
   height: 30px;

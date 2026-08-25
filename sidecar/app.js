@@ -1,3 +1,5 @@
+import { visibleCallEntries } from "./timeline-filter.js";
+
 const params = new URLSearchParams(window.location.search);
 const fragmentParams = new URLSearchParams(window.location.hash.slice(1));
 const session = fragmentParams.get("session")
@@ -24,6 +26,8 @@ const toast = document.querySelector("#toast");
 const agendaPanel = document.querySelector("#agenda-panel");
 const agendaText = document.querySelector("#agenda-text");
 const saveAgenda = document.querySelector("#save-agenda");
+const notionNotesLine = document.querySelector("#notion-notes-line");
+const notionNotesStatus = document.querySelector("#notion-notes-status");
 let desiredAction = "analyze";
 let currentAgentName = "Meeting employee";
 let currentHarnessName = "agent";
@@ -102,7 +106,7 @@ function messageRow(role, text, { pending = false, speaker, visibility = "privat
 
 function renderTimeline(callEntries = [], privateEntries = []) {
   const timeline = [
-    ...callEntries.map((entry) => ({
+    ...visibleCallEntries(callEntries).map((entry) => ({
       role: entry.speaker === currentAgentName ? "call-agent" : "call",
       speaker: entry.speaker ?? "Meeting",
       text: entry.text,
@@ -226,6 +230,28 @@ async function refreshStateOnce() {
     document.querySelector("#avatar-initial").textContent = state.agentName.slice(0, 1).toUpperCase();
     document.querySelector("#share-agent-name").textContent = state.agentName;
     document.querySelector("#write-status").textContent = state.allowWrites ? "Prototype writes allowed" : `${currentHarnessName} is read-only`;
+    const notes = state.notionNotes ?? { enabled: false, status: "disabled" };
+    notionNotesLine.dataset.state = notes.status ?? "disabled";
+    if (!notes.enabled) {
+      notionNotesStatus.textContent = "Notion notes off";
+      notionNotesLine.title = "Enable a fixed Notion destination when starting the meeting bridge.";
+    } else if (notes.status === "ready") {
+      notionNotesStatus.textContent = notes.writtenEntries
+        ? `Notion notes saved · ${notes.writtenEntries} ${notes.writtenEntries === 1 ? "entry" : "entries"}`
+        : "Notion notes ready";
+      notionNotesLine.title = notes.target ?? "Fixed Notion page";
+    } else if (notes.status === "syncing") {
+      notionNotesStatus.textContent = "Notion notes syncing";
+      notionNotesLine.title = notes.target ?? "Fixed Notion page";
+    } else if (notes.status === "starting") {
+      notionNotesStatus.textContent = "Notion notes starting";
+      notionNotesLine.title = notes.target ?? "Fixed Notion page";
+    } else {
+      notionNotesStatus.textContent = notes.pendingReview
+        ? "Notion notes stopped · review required"
+        : "Notion notes unavailable";
+      notionNotesLine.title = notes.error?.message ?? "Notion notes stopped safely.";
+    }
     const status = document.querySelector("#meeting-status");
     const dot = document.querySelector(".presence-dot");
     status.textContent = state.meetingStatus === "joined"
