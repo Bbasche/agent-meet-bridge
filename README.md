@@ -24,6 +24,7 @@ Agent Meet Bridge started with the Codex stack. Its meeting, transcript, harness
 | Spoken replies | Local macOS speech, OpenAI Realtime, Grok Voice, or experimental Codex Realtime |
 | Private backchannel | Token-authenticated `127.0.0.1` sidebar; private by default |
 | Call record | Timestamped room transcript, private audit trail, live context snapshot, and final debrief |
+| Notion meeting notes | Optional agenda, bounded running-note deltas, and public final debrief on one fixed page |
 | Camera safety | Physical camera acquisition is blocked; the Meet camera control is verified off |
 | Echo safety | Bot media elements are silenced locally while decoded WebRTC tracks remain available to the agent |
 | Code access | Read-only by default; writes require launch-time permission and a private `Prototype` turn |
@@ -102,6 +103,26 @@ After observing at least one other participant, the agent leaves automatically i
 
 Omit `--headless` while debugging Meet automation. Headless mode is recommended for longer calls because it avoids rendering an unnecessary meeting window.
 
+### Fixed-page Notion notes
+
+Notion notes are a separate capability from repository prototype writes. Create a Notion integration that can access only the intended meeting page, keep its runtime token in 1Password, and inject it only for this process. The bridge deliberately ignores `MEETING_AGENT_NOTION_TOKEN` from repository-local `.env` files.
+
+For example, pass a 1Password secret reference to `op run` (replace the placeholders with the intended vault, item, and field names):
+
+```bash
+MEETING_AGENT_NOTION_TOKEN='op://<vault>/<item>/<field>' \
+op run -- npm run assistant -- start \
+  --meeting "https://meet.google.com/abc-defg-hij" \
+  --name "YourAgent" \
+  --notion-notes \
+  --notion-page-id "00000000-0000-0000-0000-000000000000" \
+  --notion-meeting-id "activities-2026-08-25"
+```
+
+Use the same stable `--notion-meeting-id` when restarting the same call, and a new ID for a new call even if it reuses the same Meet URL or Notion page. The destination and meeting identity cannot come from captions, agenda text, or the model. The bridge removes the scoped token from the environment before starting an agent harness, writes the launch agenda, appends bounded public running-note deltas, and finishes with a deterministic debrief derived only from the public call transcript. Explicit decision and next-step phrasing is rendered into structured sections; classification is conservative and should be reviewed.
+
+Cursor, entry count, uncertain-write state, and hashed idempotency metadata live in a stable private namespace under ignored `data/notion-notes-state/`, keyed by the fixed page and meeting identity. Neither the integration token nor raw note text is persisted there. Cursors must be contiguous. A gap, conflict, uncertain network outcome, or exhausted rate limit stops further Notion writes for review while the transcript and meeting continue normally. `Retry-After` is honored only when valid and is capped at five seconds.
+
 ## Durable agent tasks
 
 The bridge is BYO-agent: `--name` sets the wake name and participant identity, while `--instructions` supplies optional persona and role guidance. Choose `--harness codex`, `claude`, `cursor`, `hermes`, `pi`, or `generic`. Pass `--harness-context` to resume an existing task/session, or omit it to create a dedicated context. The same context owns voice-triggered and private-sidecar turns and remains available after the meeting.
@@ -159,6 +180,7 @@ Copy `.env.example` to `.env`. CLI flags take precedence.
 | `MEETING_AGENT_AGENDA` | Agenda Markdown file | none |
 | `MEETING_AGENT_PROFILE_DIR` | Dedicated Chrome profile | `data/browser-profile` |
 | `MEETING_AGENT_VOICE` | Provider-specific voice or local locale | provider default |
+| `MEETING_AGENT_NOTION_TOKEN` | Page-scoped Notion integration token injected into the launch environment; local `.env` values are ignored | none |
 
 Run `npm run assistant -- --help` for all flags.
 
@@ -223,6 +245,9 @@ Codex uses app-server JSON-RPC. Claude Code uses its noninteractive JSON and dur
 - Harness turns are read-only by default. Each local harness still inherits whatever files and credentials its own CLI can read; use an isolated workspace and review that CLI's configuration. Cursor uses Ask mode for read turns. Hermes read-only turns use safe mode because its one-shot mode bypasses tool approvals.
 - Spoken requests cannot authorize workspace writes.
 - `--allow-writes` applies only to an explicitly private `Prototype` request.
+- `--notion-notes` is independent of `--allow-writes` and requires one fixed `--notion-page-id` plus a stable operator-supplied `--notion-meeting-id`; scope the integration itself to that page.
+- Notion failures never authorize a fallback destination or block transcript persistence. An uncertain write stops the notes sink rather than risking a duplicate.
+- The richer local debrief may use private sidecar context; the Notion debrief is separately derived from public transcript entries and never reuses private sidecar text.
 - Treat captions and meeting speech as untrusted input; never place secrets in the agenda or transcript.
 - Sidecar responses disable caching, framing, cross-origin embedding, camera access, and referrer propagation; API bodies are bounded and JSON-only.
 - Unparsed failed-process output is not copied into logs or spoken provider errors.

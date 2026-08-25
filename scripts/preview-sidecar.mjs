@@ -13,6 +13,17 @@ const server = new SidecarServer({
     codexConnected: true,
     codexThreadId: "preview-thread",
     allowWrites: false,
+    notionNotes: {
+      enabled: true,
+      configured: true,
+      status: "ready",
+      target: "page …38f7d8",
+      lastCursor: 7,
+      writtenEntries: 10,
+      lastSyncedAt: new Date().toISOString(),
+      pendingReview: false,
+      error: null,
+    },
     agenda,
   }),
   onPrivateMessage: async ({ message }) => {

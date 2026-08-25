@@ -57,6 +57,113 @@ function isSilentReply(text) {
   );
 }
 
+const CAPTION_DEDUPE_WINDOW_MS = 8_000;
+
+function captionDedupeTokens(text, { wakeName = "" } = {}) {
+  const normalized = String(text ?? "")
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\bwon't\b/g, "will not")
+    .replace(/\b(?:can't|cant|cannot)\b/g, "can not")
+    .replace(/\b(?:don't|dont)\b/g, "do not")
+    .replace(/\b(?:doesn't|doesnt)\b/g, "does not")
+    .replace(/\b(?:didn't|didnt)\b/g, "did not")
+    .replace(/\b(?:isn't|isnt)\b/g, "is not")
+    .replace(/\b(?:aren't|arent)\b/g, "are not")
+    .replace(/\b(?:wasn't|wasnt)\b/g, "was not")
+    .replace(/\b(?:weren't|werent)\b/g, "were not")
+    .replace(/\b(?:couldn't|couldnt)\b/g, "could not")
+    .replace(/\b(?:wouldn't|wouldnt)\b/g, "would not")
+    .replace(/\b(?:shouldn't|shouldnt)\b/g, "should not")
+    .replace(/\b(?:haven't|havent)\b/g, "have not")
+    .replace(/\b(?:hasn't|hasnt)\b/g, "has not")
+    .replace(/\b(?:hadn't|hadnt)\b/g, "had not")
+    .replace(/\b(?:mustn't|mustnt)\b/g, "must not")
+    .replace(/\bain't\b/g, "not")
+    .replace(/[']/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const wakeTokens = String(wakeName ?? "")
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  while (["okay", "ok", "hey", "well"].includes(normalized[0])) normalized.shift();
+  if (
+    wakeTokens.length &&
+    wakeTokens.every((token, index) => normalized[index] === token)
+  ) {
+    normalized.splice(0, wakeTokens.length);
+  }
+  return normalized;
+}
+
+function textHasCapitalizedToken(text, expectedToken) {
+  const words = String(text ?? "").match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.some((word) => (
+    word.toLocaleLowerCase() === expectedToken &&
+    word[0] === word[0].toLocaleUpperCase() &&
+    word[0] !== word[0].toLocaleLowerCase()
+  ));
+}
+
+/**
+ * Detect two near-identical finalized caption hypotheses without treating a
+ * natural follow-up as a duplicate. Meet can finalize the same speech through
+ * multiple caption nodes with small ASR corrections (for example
+ * "Billy" -> "Willie") or a leading discourse word added/removed.
+ */
+function captionsAreSemanticDuplicates(leftText, rightText, { wakeName = "" } = {}) {
+  const left = captionDedupeTokens(leftText, { wakeName });
+  const right = captionDedupeTokens(rightText, { wakeName });
+  if (!left.length || !right.length) return false;
+
+  const leftFolded = left.join(" ");
+  const rightFolded = right.join(" ");
+  if (leftFolded === rightFolded) return true;
+
+  // A similarity score must never erase a meaning reversal. For non-identical
+  // hypotheses containing negation, prefer a duplicate response over silently
+  // collapsing "can" into "cannot" (or moving a negation between clauses).
+  const negations = new Set(["not", "no", "never", "without", "unable", "neither", "nor"]);
+  if (left.some((token) => negations.has(token)) || right.some((token) => negations.has(token))) {
+    return false;
+  }
+
+  // Outside exact wake/filler normalization, allow only one bounded
+  // proper-name correction. A broad token-overlap score can erase a single
+  // content-word reversal (approve/reject, enable/disable), which is unsafe at
+  // the response boundary. Meet's observed duplicate changed only the
+  // capitalized addressee name (Billy -> Willie).
+  if (left.length !== right.length || left.length < 5) return false;
+  const changed = [];
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) changed.push(index);
+  }
+  if (changed.length !== 1) return false;
+  const index = changed[0];
+  const leftToken = left[index];
+  const rightToken = right[index];
+  const correctionContexts = new Set(["tell", "ask", "call", "called", "name", "named", "contact", "invite"]);
+  if (
+    index === 0 ||
+    !correctionContexts.has(left[index - 1]) ||
+    left[index - 1] !== right[index - 1] ||
+    !textHasCapitalizedToken(leftText, leftToken) ||
+    !textHasCapitalizedToken(rightText, rightToken)
+  ) return false;
+  const phoneticName = (token) => token.replace(/(?:ie|y)$/u, "i");
+  const leftName = phoneticName(leftToken);
+  const rightName = phoneticName(rightToken);
+  return Math.min(leftName.length, rightName.length) >= 4 &&
+    leftName.slice(1) === rightName.slice(1);
+}
+
 function commandExists(command) {
   const finder = process.platform === "win32" ? "where" : "which";
   return spawnSync(finder, [command], { stdio: "ignore" }).status === 0;
@@ -121,8 +228,7 @@ export class LocalCodexVoiceRuntime {
     this.lastLoudAt = 0;
     this.audioFrameCount = 0;
     this.audioPeakRms = 0;
-    this.lastCaptionKey = "";
-    this.lastCaptionAt = 0;
+    this.recentCaptions = [];
     this.children = new Set();
   }
 
@@ -192,16 +298,21 @@ export class LocalCodexVoiceRuntime {
       : "Meeting";
     const clean = String(text ?? "").replace(/\s+/g, " ").trim();
     if (!clean) return false;
-    const captionKey = clean
-      .toLowerCase()
-      .replace(new RegExp(`\\b${this.agentName.toLowerCase()}\\b`, "g"), " ")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-    if (captionKey && captionKey === this.lastCaptionKey && Date.now() - this.lastCaptionAt < 8_000) {
+    const now = Date.now();
+    const speakerKey = speaker.toLocaleLowerCase();
+    this.recentCaptions = this.recentCaptions.filter(
+      (recent) => now - recent.at < CAPTION_DEDUPE_WINDOW_MS,
+    );
+    if (this.recentCaptions.some(
+      (recent) => recent.speakerKey === speakerKey && captionsAreSemanticDuplicates(
+        recent.text,
+        clean,
+        { wakeName: this.agentName },
+      ),
+    )) {
       return true;
     }
-    this.lastCaptionKey = captionKey;
-    this.lastCaptionAt = Date.now();
+    this.recentCaptions.push({ speakerKey, text: clean, at: now });
     this.queue = this.queue
       .then(() => this.#handleTranscript(clean, { speaker }))
       .catch((error) => this.logger.error?.(`[local voice] caption failed: ${error.message}`));
@@ -335,4 +446,11 @@ export class LocalCodexVoiceRuntime {
   }
 }
 
-export { cleanWhisperText, downsample48kTo16k, isSilentReply, pcmRms, wavBuffer };
+export {
+  captionsAreSemanticDuplicates,
+  cleanWhisperText,
+  downsample48kTo16k,
+  isSilentReply,
+  pcmRms,
+  wavBuffer,
+};

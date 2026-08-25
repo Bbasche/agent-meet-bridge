@@ -13,6 +13,14 @@ import { CodexRealtimeVoiceRuntime } from "./codex-realtime-runtime.mjs";
 import { GrokVoiceRuntime } from "./grok-voice-runtime.mjs";
 import { OpenAIRealtimeVoiceRuntime } from "./openai-realtime-runtime.mjs";
 import { LocalCodexVoiceRuntime } from "./local-codex-voice-runtime.mjs";
+import {
+  meetingAgendaBatch,
+  meetingDebriefBatch,
+  meetingNoteBatchFromTranscript,
+  NotionNotesSink,
+  publicMeetingDebriefFromTranscript,
+  takeNotionNotesToken,
+} from "./notion-notes-sink.mjs";
 import { createHarness, detectHarnesses, HARNESS_PROVIDERS } from "./harnesses/registry.mjs";
 import { boundedHarnessText, roomHarnessAnalysisText, spokenHarnessText } from "./harness-output.mjs";
 import {
@@ -27,6 +35,9 @@ import { TranscriptStore } from "./transcript-store.mjs";
 import { buildMeetingContext, MeetingContextAccumulator } from "./meeting-context.mjs";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Accept the Notion credential only from the inherited launch environment
+// (for example `op run`), never from the repository-local .env loader.
+const NOTION_NOTES_TOKEN = takeNotionNotesToken();
 
 function loadEnvFile(filePath) {
   try {
@@ -39,6 +50,7 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(PACKAGE_ROOT, ".env"));
 if (process.cwd() !== PACKAGE_ROOT) loadEnvFile(path.resolve(process.cwd(), ".env"));
+takeNotionNotesToken();
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -73,6 +85,9 @@ const { values, positionals } = parseArgs({
     "codex-workspace": { type: "string" },
     workspace: { type: "string" },
     "allow-writes": { type: "boolean", default: false },
+    "notion-notes": { type: "boolean", default: false },
+    "notion-page-id": { type: "string" },
+    "notion-meeting-id": { type: "string" },
     announce: { type: "boolean", default: true },
     search: { type: "string" },
     limit: { type: "string" },
@@ -115,6 +130,9 @@ Start options:
   --workspace <path>              Repository used by the connected harness
   --codex-workspace <path>        Legacy alias for --workspace
   --allow-writes                  Allow only private Prototype turns to edit files
+  --notion-notes                  Append structured meeting notes to one fixed Notion page
+  --notion-page-id <id>           Required fixed destination when --notion-notes is enabled
+  --notion-meeting-id <id>        Required stable meeting identity for restart-safe notes
   --no-announce                  Skip the audible recording/identity disclosure
   --profile-dir <path>           Dedicated persistent Chrome profile
   --browser-channel chrome       Use installed Chrome; use chromium for Playwright Chromium
@@ -629,6 +647,33 @@ async function startMeeting() {
     },
   });
   await transcriptStore.initialize();
+  const notionNotesSink = new NotionNotesSink({
+    enabled: values["notion-notes"],
+    pageId: values["notion-page-id"],
+    meetingId: values["notion-meeting-id"],
+    token: NOTION_NOTES_TOKEN,
+    stateRoot: path.join(PACKAGE_ROOT, "data", "notion-notes-state"),
+  });
+  const initialNotionNotesState = await notionNotesSink.initialize();
+  let notionNotesCursor = initialNotionNotesState.lastCursor;
+  const captureNextNotionBatch = (buildBatch) => {
+    if (!notionNotesSink.getState().configured) return null;
+    const cursor = notionNotesCursor + 1;
+    const batch = buildBatch(cursor);
+    notionNotesCursor = cursor;
+    return notionNotesSink.capture(batch);
+  };
+  if (
+    initialNotionNotesState.configured &&
+    initialNotionNotesState.status === "ready" &&
+    initialNotionNotesState.lastCursor === 0
+  ) {
+    await captureNextNotionBatch((cursor) => meetingAgendaBatch({
+      meetingId: values["notion-meeting-id"],
+      cursor,
+      agendaText,
+    }));
+  }
 
   let meetingStatus = "starting";
   let voiceStatus = "connecting";
@@ -702,8 +747,9 @@ async function startMeeting() {
       kind: "private-debrief",
     });
     console.log(`Debrief: ${transcriptStore.debriefPath}`);
+    return debrief;
   };
-  const stop = async ({ debrief = false, reason = "operator-request" } = {}) => {
+  const stop = async ({ debrief = true, reason = "operator-request" } = {}) => {
     if (stopping) return;
     stopping = true;
     meetingStatus = "ending";
@@ -715,8 +761,27 @@ async function startMeeting() {
     }
     await voiceRuntime?.close().catch(() => {});
     await flushContextSnapshot().catch((error) => console.error(error.message));
-    if (debrief) await createDebrief(reason).catch((error) => console.error(error.message));
+    if (debrief) {
+      await createDebrief(reason).catch((error) => {
+        console.error(error.message);
+      });
+    }
     await transcriptStore.flush().catch((error) => console.error(error.message));
+    if (debrief) {
+      try {
+        const publicNotionDebrief = publicMeetingDebriefFromTranscript({ transcript, reason });
+        const pending = captureNextNotionBatch((cursor) => meetingDebriefBatch({
+          meetingId: values["notion-meeting-id"],
+          cursor,
+          debriefText: publicNotionDebrief,
+        }));
+        if (pending) await pending;
+      } catch {
+        // The local debrief and call shutdown must survive an optional notes
+        // sink rejecting or stopping a final structured append.
+      }
+    }
+    await notionNotesSink.flush().catch(() => {});
     await workHarness.close();
     keepAwake?.kill("SIGTERM");
     await sidecar?.close();
@@ -738,10 +803,28 @@ async function startMeeting() {
     onBargeIn: () => transport?.clearPlayback(),
     onTranscript: async (entry) => {
       const complete = { ...entry, timestamp: new Date().toISOString() };
+      if (
+        complete.role === "assistant" ||
+        complete.kind === "assistant" ||
+        complete.speaker === agentName
+      ) {
+        await transport?.expectAgentSpeech(complete.text);
+      }
       transcript.push(complete);
       if (transcript.length > 500) transcript.splice(0, transcript.length - 500);
       meetingContext.add(complete);
       await transcriptStore.append(complete);
+      try {
+        const pending = captureNextNotionBatch((cursor) => meetingNoteBatchFromTranscript({
+          meetingId: values["notion-meeting-id"],
+          cursor,
+          entry: complete,
+        }));
+        if (pending) void pending;
+      } catch {
+        // Transcript persistence and the live call must not depend on the
+        // optional external notes sink accepting an entry.
+      }
       scheduleContextSnapshot();
       console.log(`${complete.speaker}: ${complete.text}`);
     },
@@ -871,6 +954,7 @@ async function startMeeting() {
       codexConnected: harnessProvider === "codex",
       codexThreadId: codexThreadId ?? null,
       allowWrites: values["allow-writes"],
+      notionNotes: notionNotesSink.getState(),
       agenda: agendaText,
       agendaPath: agenda.path,
       transcript: transcript.slice(),
@@ -914,6 +998,17 @@ async function startMeeting() {
         kind: "private-agenda",
       });
       rememberPrivate({ speaker: "Operator", text: `Updated meeting agenda:\n${text}` });
+      try {
+        const pending = captureNextNotionBatch((cursor) => meetingAgendaBatch({
+          meetingId: values["notion-meeting-id"],
+          cursor,
+          agendaText: text,
+        }));
+        if (pending) void pending;
+      } catch {
+        // Agenda editing remains local when the optional notes sink cannot
+        // accept the structured update.
+      }
       return { agenda: agendaText };
     },
     onSpeak: async ({ text }) => {
@@ -923,6 +1018,7 @@ async function startMeeting() {
         kind: "private-share",
       });
       rememberPrivate({ speaker: "Operator", text: `Shared with room: ${text}` });
+      await transport?.expectAgentSpeech(text);
       await voiceRuntime.speak(text);
     },
   });
@@ -942,13 +1038,15 @@ async function startMeeting() {
   }
   meetingStatus = "joined";
   if (values.announce) {
-    await voiceRuntime.announce(
-      `Hi, I'm ${agentName}, an AI participant. I'm listening and saving a transcript of this meeting.`,
-    );
+    const announcement = `Hi, I'm ${agentName}, an AI participant. I'm listening and saving a transcript of this meeting.`;
+    await transport.expectAgentSpeech(announcement);
+    await voiceRuntime.announce(announcement);
   }
 
   console.log(`\n${agentName} joined the meeting.`);
   console.log(`Runtime: ${runtimeProvider} · Harness: ${harnessProvider} · Mode: ${mode}${values["allow-writes"] ? " · private prototype writes enabled" : " · read-only"}`);
+  const notionNotesState = notionNotesSink.getState();
+  console.log(`Notion notes: ${notionNotesState.enabled ? notionNotesState.status : "disabled"}`);
   if (agenda.path) console.log(`Agenda: ${agenda.path}`);
   console.log(`Chrome profile: ${profileDir}`);
   console.log(`Transcript: ${transcriptStore.markdownPath}`);
@@ -956,8 +1054,8 @@ async function startMeeting() {
   console.log("Press Ctrl+C to remove it from the call.\n");
   if (values["open-sidecar"]) openLocalUrl(sidecarUrl);
 
-  process.on("SIGINT", () => stop());
-  process.on("SIGTERM", () => stop());
+  process.on("SIGINT", () => stop({ debrief: true, reason: "operator-request" }));
+  process.on("SIGTERM", () => stop({ debrief: true, reason: "operator-request" }));
 }
 
 try {
